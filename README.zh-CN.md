@@ -113,8 +113,6 @@ curl -fLO https://github.com/shidevil/amnezia-china-split-tunnel/releases/latest
 
 > **使用 fork？** 请把所有链接中的 `shidevil/amnezia-china-split-tunnel` 替换为 `<你的账号>/<你的仓库>`。如需固定到某一次构建，请使用它的标签：
 > `https://github.com/<owner>/<repo>/releases/download/<tag>/cn-cidr.json`。标签对应的发布被清理后，该链接即失效。
->
-> **从旧版 README 过来？** 旧版指向 `releases/download/latest/<file>`，即标签为 `latest` 的那个发布。该发布不再更新，请改用 `releases/latest/download/<file>`（上面的链接）。
 
 ### 2. 导入 Amnezia
 

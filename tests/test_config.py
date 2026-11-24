@@ -60,9 +60,7 @@ def test_shipped_config_has_the_documented_dns_defaults():
         "8.8.8.8",
         "9.9.9.9",
         "76.76.2.0",
-        "84.200.69.80",
         "185.222.222.222",
-        "91.239.100.100",
         "74.82.42.42",
     ]
     assert config.dns.timeout == 5

@@ -113,8 +113,6 @@ curl -fLO https://github.com/shidevil/amnezia-china-split-tunnel/releases/latest
 
 > **Using a fork?** Replace `shidevil/amnezia-china-split-tunnel` with `<your-account>/<your-repository>` in every URL. To pin one specific build, use its tag:
 > `https://github.com/<owner>/<repo>/releases/download/<tag>/cn-cidr.json`. A tag stops working once its release is pruned.
->
-> **Coming from an older version of this README?** It pointed at `releases/download/latest/<file>`, the release whose tag is `latest`. That release is no longer updated: use `releases/latest/download/<file>` (the links above) instead.
 
 ### 2. Import into Amnezia
 
