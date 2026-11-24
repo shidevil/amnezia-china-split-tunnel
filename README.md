@@ -4,7 +4,7 @@
 
 **Auto-updating IPv4 split-tunnel lists for [AmneziaVPN](https://amnezia.org): a fixed list of mainland-China networks, and a refreshed list of websites outside China that need the VPN.**
 
-Refreshed every 6 hours (00:17, 06:17, 12:17, 18:17 UTC) by GitHub Actions · Published as GitHub Release assets · No server required
+Refreshed every 6 hours (01:37, 07:37, 13:37, 19:37 UTC) by GitHub Actions · Published as GitHub Release assets · No server required
 
 [![Build](https://github.com/shidevil/amnezia-china-split-tunnel/actions/workflows/build.yml/badge.svg)](https://github.com/shidevil/amnezia-china-split-tunnel/actions/workflows/build.yml)
 [![CI](https://github.com/shidevil/amnezia-china-split-tunnel/actions/workflows/ci.yml/badge.svg)](https://github.com/shidevil/amnezia-china-split-tunnel/actions/workflows/ci.yml)
@@ -74,7 +74,7 @@ This project is built around that. It publishes exactly **two kinds of list**, a
 | **Amnezia mode** | `Directly`: China stays outside the VPN | `Via VPN` only: never import it in `Directly` mode |
 | **Goes stale in the app?** | barely: allocations change slowly | yes: DNS answers change, so re-import it from time to time |
 
-Every 6 hours (00:17, 06:17, 12:17 and 18:17 UTC) a GitHub Actions workflow:
+Every 6 hours (01:37, 07:37, 13:37 and 19:37 UTC) a GitHub Actions workflow:
 
 1. fetches the upstream lists, each pinned to one upstream commit,
 2. parses and normalises the rules,
@@ -374,7 +374,7 @@ Unknown keys are rejected, so a typo such as `enabeld: false` can never silently
 
 | | |
 |---|---|
-| **Schedule** | `17 */6 * * *` (00:17, 06:17, 12:17, 18:17 **UTC**). GitHub may delay scheduled runs under load; treat 6 hours as a refresh interval, not a guarantee. |
+| **Schedule** | `37 1,7,13,19 * * *` (01:37, 07:37, 13:37, 19:37 **UTC**). GitHub may delay scheduled runs under load; treat 6 hours as a refresh interval, not a guarantee. |
 | **Manual run** | *Actions → Build Amnezia lists → Run workflow* |
 | **Manual inputs** | `source`: `all` or a comma-separated list such as `cn-cidr,proxy` (a single-source build needs an existing release, so run a full build first); `force`: publish even if nothing changed |
 | **Release** | One rolling release, tag `latest`. Assets are replaced in place on every successful build, and only when their content changed. |

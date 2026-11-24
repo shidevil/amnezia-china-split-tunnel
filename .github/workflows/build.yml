@@ -2,9 +2,9 @@ name: Build Amnezia lists
 
 on:
   schedule:
-    # Every 6 hours (UTC), at minute 17: GitHub delays scheduled runs at the start of every
+    # Every 6 hours (UTC), at minute 37: GitHub delays scheduled runs at the start of every
     # hour and may drop them under load, and advises running at a different time of the hour.
-    - cron: "17 */6 * * *"
+    - cron: "37 1,7,13,19 * * *"
   workflow_dispatch:
     inputs:
       source:

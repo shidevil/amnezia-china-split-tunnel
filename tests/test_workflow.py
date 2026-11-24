@@ -28,7 +28,7 @@ def test_workflow_files_exist():
 
 def test_build_runs_every_six_hours_and_can_be_started_manually():
     on = triggers(load("build.yml"))
-    assert on["schedule"] == [{"cron": "17 */6 * * *"}]
+    assert on["schedule"] == [{"cron": "37 1,7,13,19 * * *"}]
     inputs = on["workflow_dispatch"]["inputs"]
     assert set(inputs) == {"source", "force"}
     assert inputs["source"]["default"] == "all"

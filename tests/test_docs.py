@@ -66,9 +66,8 @@ def test_readmes_state_the_cron_and_run_times_that_the_workflow_really_has(readm
     workflow = yaml.safe_load((ROOT / ".github" / "workflows" / "build.yml").read_text("utf-8"))
     cron = workflow.get("on", workflow.get(True))["schedule"][0]["cron"]
     minute, hours = cron.split()[:2]
-    times = [
-        f"{hour:02d}:{int(minute):02d}" for hour in range(0, 24, int(hours.removeprefix("*/")))
-    ]
+    # The cron lists its hours explicitly, so every run time is spelled out in the README too.
+    times = [f"{int(hour):02d}:{int(minute):02d}" for hour in hours.split(",")]
     assert f"`{cron}`" in readme
     for time in times:
         assert time in readme, f"the README does not say that it runs at {time} UTC"
