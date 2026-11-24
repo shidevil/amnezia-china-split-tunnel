@@ -105,7 +105,6 @@ GitHub Actions 工作流每 6 小时执行一次：
 |---|---|
 | cn-cidr（固定） | <https://github.com/shidevil/amnezia-china-split-tunnel/releases/latest/download/cn-cidr.json> |
 | proxy（持续更新） | <https://github.com/shidevil/amnezia-china-split-tunnel/releases/latest/download/proxy.json> |
-| 构建元数据 | <https://github.com/shidevil/amnezia-china-split-tunnel/releases/latest/download/build-info.json> |
 
 ```bash
 curl -fLO https://github.com/shidevil/amnezia-china-split-tunnel/releases/latest/download/cn-cidr.json

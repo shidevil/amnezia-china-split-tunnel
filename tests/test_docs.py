@@ -63,6 +63,8 @@ def test_relative_links_point_at_files_that_exist(readme):
 def test_every_documented_download_name_is_a_real_source_or_build_info(readme):
     from src.config import load_config
 
-    names = set(load_config(ROOT / "config.yaml").sources) | {"build-info"}
+    lists = set(load_config(ROOT / "config.yaml").sources)
     linked = set(re.findall(r"/releases/latest/download/([a-z0-9-]+)\.json", readme))
-    assert linked == names
+    # Every list must be downloadable from the README, and no link may point at a file that
+    # is never published. The build-info link is allowed but not required.
+    assert lists <= linked <= lists | {"build-info"}

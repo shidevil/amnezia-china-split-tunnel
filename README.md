@@ -105,7 +105,6 @@ The rolling release is tagged `latest`. These URLs are stable and need no authen
 |---|---|
 | cn-cidr (fixed) | <https://github.com/shidevil/amnezia-china-split-tunnel/releases/latest/download/cn-cidr.json> |
 | proxy (updated) | <https://github.com/shidevil/amnezia-china-split-tunnel/releases/latest/download/proxy.json> |
-| build metadata | <https://github.com/shidevil/amnezia-china-split-tunnel/releases/latest/download/build-info.json> |
 
 ```bash
 curl -fLO https://github.com/shidevil/amnezia-china-split-tunnel/releases/latest/download/cn-cidr.json
