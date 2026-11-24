@@ -26,9 +26,9 @@ def test_workflow_files_exist():
     assert {f.name for f in FILES} >= {"build.yml", "ci.yml"}
 
 
-def test_build_runs_every_six_hours_and_can_be_started_manually():
+def test_build_runs_every_eight_hours_and_can_be_started_manually():
     on = triggers(load("build.yml"))
-    assert on["schedule"] == [{"cron": "37 1,7,13,19 * * *"}]
+    assert on["schedule"] == [{"cron": "37 1,9,17 * * *"}]
     inputs = on["workflow_dispatch"]["inputs"]
     assert set(inputs) == {"source", "force"}
     assert inputs["source"]["default"] == "all"
@@ -192,7 +192,7 @@ def test_assets_travel_to_the_publish_job_in_a_single_staged_directory():
 
 
 def test_a_run_with_nothing_to_publish_never_stages_or_uploads_assets():
-    # Most 6-hourly runs change nothing, so dist/ holds no *.json and `cp dist/*.json`
+    # A run can change nothing, so dist/ holds no *.json and `cp dist/*.json`
     # would fail under errexit, turning every quiet run red. Staging and the artifact
     # upload must only happen when the generator asked for a publish.
     steps = load("build.yml")["jobs"]["build"]["steps"]

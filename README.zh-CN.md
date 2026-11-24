@@ -4,7 +4,7 @@
 
 **自动更新的 [AmneziaVPN](https://amnezia.org) IPv4 分流列表：一份固定的中国大陆网段列表，一份持续刷新的“中国大陆以外需要走 VPN 的网站”列表。**
 
-由 GitHub Actions 每 6 小时刷新（UTC 01:37、07:37、13:37、19:37）· 以 GitHub Release 资产发布 · 无需自建服务器
+由 GitHub Actions 每 8 小时刷新（UTC 01:37、09:37、17:37）· 以 GitHub Release 资产发布 · 无需自建服务器
 
 [![Build](https://github.com/shidevil/amnezia-china-split-tunnel/actions/workflows/build.yml/badge.svg)](https://github.com/shidevil/amnezia-china-split-tunnel/actions/workflows/build.yml)
 [![CI](https://github.com/shidevil/amnezia-china-split-tunnel/actions/workflows/ci.yml/badge.svg)](https://github.com/shidevil/amnezia-china-split-tunnel/actions/workflows/ci.yml)
@@ -25,7 +25,7 @@
 | 你想要… | 下载 | Amnezia 模式 |
 |---|---|---|
 | 中国大陆流量留在 VPN **之外**（固定列表，无需刷新） | [`cn-cidr.json`](https://github.com/shidevil/amnezia-china-split-tunnel/releases/latest/download/cn-cidr.json) | `Directly` |
-| **中国大陆以外**需要走 VPN 的网站（被封锁或境外站点；每 6 小时刷新） | [`proxy.json`](https://github.com/shidevil/amnezia-china-split-tunnel/releases/latest/download/proxy.json) | `Via VPN` |
+| **中国大陆以外**需要走 VPN 的网站（被封锁或境外站点；每 8 小时刷新） | [`proxy.json`](https://github.com/shidevil/amnezia-china-split-tunnel/releases/latest/download/proxy.json) | `Via VPN` |
 
 **`proxy.json` 必须导入 `Via VPN` 模式。** 它列出的是中国大陆以外的网站，如果导入 `Directly` 模式，这些网站会绕过 VPN，与这份列表的用途正好相反。
 
@@ -74,7 +74,7 @@ AmneziaVPN 的分流功能路由的是 **IP 地址和子网**。它从不按域�
 | **Amnezia 模式** | `Directly`：中国大陆流量留在 VPN 之外 | 只能用 `Via VPN`：绝不要导入 `Directly` 模式 |
 | **在 App 内会过期吗？** | 几乎不会：地址分配变化很慢 | 会：DNS 应答会变，需要时不时重新导入 |
 
-GitHub Actions 工作流每 6 小时（UTC 01:37、07:37、13:37、19:37，即北京时间 09:37、15:37、21:37、03:37）执行一次：
+GitHub Actions 工作流每 8 小时（UTC 01:37、09:37、17:37，即北京时间 09:37、17:37、01:37）执行一次：
 
 1. 拉取上游列表，每个都固定到同一个上游 commit，
 2. 解析并规范化规则，
@@ -87,7 +87,7 @@ GitHub Actions 工作流每 6 小时（UTC 01:37、07:37、13:37、19:37，即�
 
 ### 特性
 
-- **全自动**：每 6 小时定时运行，也可手动触发；不依赖本地机器或服务器。
+- **全自动**：每 8 小时定时运行，也可手动触发；不依赖本地机器或服务器。
 - **两份列表，用途不重叠**：一份不依赖 DNS 的固定列表，一份持续刷新的域名列表。
 - **保留后缀规则**：`.example.com` 与 `example.com` 是不同的规则，输出中也保持区分。
 - **设计上安全**：全部通过才发布、失败率门槛、每个上游的数量下限与合并后网段的规模上限、对写出的文件做 schema 校验，并且在 DNS 解析器不可达时快速中止。
@@ -266,7 +266,7 @@ flowchart LR
 - 非公网单播 IPv4（`0.0.0.0/8`、`10/8`、`100.64/10`、`127/8`、`169.254/16`、`172.16/12`、`192.168/16`、`198.18/15`、组播、保留段、文档段等）会被丢弃。网段表是显式列出的，因此结果不依赖 Python 版本。
 - 并发有上限（固定数量的 worker），并设有全局每秒查询数（QPS）上限以保护公共解析器。
 - 同一次构建中，同一个名称不会被查询两次，即使它出现在多条规则或多个列表中。
-- 不做跨构建的 DNS 缓存：记录 TTL 远短于 6 小时的刷新间隔，缓存几乎不会命中，反而可能返回过期数据。
+- 不做跨构建的 DNS 缓存：记录 TTL 远短于 8 小时的刷新间隔，缓存几乎不会命中，反而可能返回过期数据。
 
 每条规则恰好得到下列结果之一：
 
@@ -376,7 +376,7 @@ validation:           # 所有域名数据源的默认值
 
 | | |
 |---|---|
-| **定时** | `37 1,7,13,19 * * *`（**UTC** 时间 01:37、07:37、13:37、19:37）。GitHub 在负载高时可能延迟定时任务，请把 6 小时视为刷新间隔而非保证。 |
+| **定时** | `37 1,9,17 * * *`（**UTC** 时间 01:37、09:37、17:37）。GitHub 在负载高时可能延迟定时任务，请把 8 小时视为刷新间隔而非保证。 |
 | **手动运行** | *Actions → Build Amnezia lists → Run workflow* |
 | **手动参数** | `source`：`all` 或逗号分隔的列表，如 `cn-cidr,proxy`（单数据源构建需要已存在的发布，请先完整构建一次）；`force`：即使没有变化也发布 |
 | **发布** | 每次有列表发生变化的构建都会产生一个新的 Release，以构建时间作为标签。它一次性发布并标记为 *Latest*；任何资产都不会被就地替换。每个发布都包含全部列表（没有变化的列表沿用上一版），因此每个发布都是完整的快照。只保留最新的若干个发布（工作流中的 `KEEP_RELEASES`），更早的会被删除。关注了仓库 *Releases* 的用户会收到每个发布的通知。 |
@@ -535,7 +535,7 @@ python -m src.main --source cn-cidr --out-dir dist --reports-dir reports   # 真
 - **地域与解析器依赖。** 同一个域名在不同解析器、不同查询位置、不同时间可能解析到不同地址。这份列表反映的是 GitHub runner 通过所配置的公共解析器看到的结果。
 - **CDN 地址是共享的。** 今天承载某个站点的 IP，也可能同时承载其他无关站点；按 IP 路由可能误伤（或漏掉）其他服务。
 - **后缀规则只是近似。** `.example.com` 的含义是“该域名及所有子域名”，但只解析了主域名 `example.com`。位于不同 IP 上的子域名**不会**被发现，生成器也不会去猜。
-- **两次构建之间 DNS 会变化，而 App 不会跟随。** 6 小时的定时只是刷新间隔，不保证变化会立即体现，而且文件变了也要你重新导入才有用。
+- **两次构建之间 DNS 会变化，而 App 不会跟随。** 8 小时的定时只是刷新间隔，不保证变化会立即体现，而且文件变了也要你重新导入才有用。
 - **部分域名没有 A 记录。** NXDOMAIN、空应答和仅有 IPv6 的主机会被排除。纯顶级域名规则则根本无法用 IP 表达。
 - **列表很大。** 如果你加入 Loyalsoldier 的大型列表（`reject` 约 200,000 条规则，`direct` 约 110,000 条），文件会变得非常大，客户端处理它们可能很慢，甚至无法导入。
 - **IDN 与非 DNS 规则。** 非 ASCII 名称、通配符和 IP 字面量会作为无效行被报告并跳过（当前 Loyalsoldier 列表中没有这类规则）。

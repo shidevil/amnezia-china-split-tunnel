@@ -4,7 +4,7 @@
 
 **Auto-updating IPv4 split-tunnel lists for [AmneziaVPN](https://amnezia.org): a fixed list of mainland-China networks, and a refreshed list of websites outside China that need the VPN.**
 
-Refreshed every 6 hours (01:37, 07:37, 13:37, 19:37 UTC) by GitHub Actions · Published as GitHub Release assets · No server required
+Refreshed every 8 hours (01:37, 09:37, 17:37 UTC) by GitHub Actions · Published as GitHub Release assets · No server required
 
 [![Build](https://github.com/shidevil/amnezia-china-split-tunnel/actions/workflows/build.yml/badge.svg)](https://github.com/shidevil/amnezia-china-split-tunnel/actions/workflows/build.yml)
 [![CI](https://github.com/shidevil/amnezia-china-split-tunnel/actions/workflows/ci.yml/badge.svg)](https://github.com/shidevil/amnezia-china-split-tunnel/actions/workflows/ci.yml)
@@ -25,7 +25,7 @@ Pick **one** of the two lists. They are alternatives, not a pair ([why](#2-impor
 | If you want… | Download | Amnezia mode |
 |---|---|---|
 | Mainland-China traffic to stay **outside** the VPN (fixed list, no refreshing needed) | [`cn-cidr.json`](https://github.com/shidevil/amnezia-china-split-tunnel/releases/latest/download/cn-cidr.json) | `Directly` |
-| Websites **outside China** that need the VPN (blocked or foreign; refreshed every 6 hours) | [`proxy.json`](https://github.com/shidevil/amnezia-china-split-tunnel/releases/latest/download/proxy.json) | `Via VPN` |
+| Websites **outside China** that need the VPN (blocked or foreign; refreshed every 8 hours) | [`proxy.json`](https://github.com/shidevil/amnezia-china-split-tunnel/releases/latest/download/proxy.json) | `Via VPN` |
 
 **`proxy.json` must be imported in `Via VPN` mode.** It lists websites outside China, so in `Directly` mode they would skip the VPN, the opposite of what the list is for.
 
@@ -74,7 +74,7 @@ This project is built around that. It publishes exactly **two kinds of list**, a
 | **Amnezia mode** | `Directly`: China stays outside the VPN | `Via VPN` only: never import it in `Directly` mode |
 | **Goes stale in the app?** | barely: allocations change slowly | yes: DNS answers change, so re-import it from time to time |
 
-Every 6 hours (01:37, 07:37, 13:37 and 19:37 UTC) a GitHub Actions workflow:
+Every 8 hours (01:37, 09:37 and 17:37 UTC) a GitHub Actions workflow:
 
 1. fetches the upstream lists, each pinned to one upstream commit,
 2. parses and normalises the rules,
@@ -87,7 +87,7 @@ If anything goes wrong while building (a DNS outage, an empty or truncated upstr
 
 ### Highlights
 
-- **Fully automated**: scheduled every 6 hours plus manual runs; no local machine or server involved.
+- **Fully automated**: scheduled every 8 hours plus manual runs; no local machine or server involved.
 - **Two lists, no overlap in purpose**: one fixed list that does not depend on DNS, one refreshed domain list.
 - **Suffix rules preserved**: `.example.com` and `example.com` are different rules and stay different in the output.
 - **Safe by construction**: all-or-nothing publishing, failure-rate gates, a size floor for every upstream and a size ceiling for the merged network list, schema validation of the written files, and a fail-fast abort when the DNS resolvers are unreachable.
@@ -266,7 +266,7 @@ This applies to domain lists only.
 - Addresses that are not public unicast IPv4 (`0.0.0.0/8`, `10/8`, `100.64/10`, `127/8`, `169.254/16`, `172.16/12`, `192.168/16`, `198.18/15`, multicast, reserved, documentation ranges, …) are dropped. The range table is explicit, so results do not depend on the Python version.
 - Concurrency is bounded (a fixed pool of workers) and a global queries-per-second cap protects the public resolvers.
 - The same name is never queried twice in a build, even when it appears in several rules or lists.
-- No cross-build DNS cache: record TTLs are far shorter than the 6-hour refresh interval, so a cache would almost never hit and could only serve stale data.
+- No cross-build DNS cache: record TTLs are far shorter than the 8-hour refresh interval, so a cache would almost never hit and could only serve stale data.
 
 Each rule ends in exactly one outcome:
 
@@ -376,7 +376,7 @@ Unknown keys are rejected, so a typo such as `enabeld: false` can never silently
 
 | | |
 |---|---|
-| **Schedule** | `37 1,7,13,19 * * *` (01:37, 07:37, 13:37, 19:37 **UTC**). GitHub may delay scheduled runs under load; treat 6 hours as a refresh interval, not a guarantee. |
+| **Schedule** | `37 1,9,17 * * *` (01:37, 09:37, 17:37 **UTC**). GitHub may delay scheduled runs under load; treat 8 hours as a refresh interval, not a guarantee. |
 | **Manual run** | *Actions → Build Amnezia lists → Run workflow* |
 | **Manual inputs** | `source`: `all` or a comma-separated list such as `cn-cidr,proxy` (a single-source build needs an existing release, so run a full build first); `force`: publish even if nothing changed |
 | **Release** | A new release for every build in which a list changed, tagged with the build time. It is published all at once and marked *Latest*; nothing is ever replaced in place. Every release holds every list (the unchanged ones are carried over), so each is a complete snapshot. Only the newest releases are kept (`KEEP_RELEASES` in the workflow); older ones are deleted. People watching the repository for *Releases* are notified of each one. |
@@ -535,7 +535,7 @@ This file is an **IP snapshot of DNS answers**, not a live domain-matching syste
 - **Geography and resolver dependence.** A domain can resolve to different addresses depending on the resolver, the location it is queried from, and the time. The list reflects what the GitHub runner saw through the configured public resolvers.
 - **CDN addresses are shared.** An IP that serves one site today may serve unrelated sites too; routing by IP can catch (or miss) other services.
 - **Suffix rules are only approximated.** `.example.com` means "the domain and all subdomains", but only the apex `example.com` is resolved. Subdomains on different IPs are **not** discovered, and the generator does not guess them.
-- **DNS changes between builds, and the app does not follow.** The 6-hour schedule is a refresh interval, not a promise that changes show up immediately, and a changed file only helps once you import it.
+- **DNS changes between builds, and the app does not follow.** The 8-hour schedule is a refresh interval, not a promise that changes show up immediately, and a changed file only helps once you import it.
 - **Some domains have no A record.** NXDOMAIN, empty answers and IPv6-only hosts are left out. Bare top-level-domain rules cannot be expressed as IPs at all.
 - **Large lists.** If you add one of the big Loyalsoldier lists (`reject` has about 200,000 rules, `direct` about 110,000), the file gets very large and the client may be slow with it or unable to import it.
 - **IDN and non-DNS rules.** Non-ASCII names, wildcards and IP literals are reported as invalid lines and skipped (none exist in the current Loyalsoldier lists).

@@ -67,6 +67,11 @@ dns:
     - 1.1.1.1
     - 8.8.8.8
     - 9.9.9.9
+    - 76.76.2.0 # Control D
+    - 84.200.69.80 # DNS.WATCH
+    - 185.222.222.222 # DNS.SB
+    - 91.239.100.100 # UncensoredDNS (anycast)
+    - 74.82.42.42 # Hurricane Electric
   timeout: 5 # seconds per attempt
   retries: 2 # extra attempts after the first, each on the next resolver
   concurrency: 100 # lookups in flight at once
