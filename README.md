@@ -2,7 +2,7 @@
 
 # Amnezia China Split-Tunnel Lists
 
-**Auto-updating IPv4 split-tunnel lists for [AmneziaVPN](https://amnezia.org): a fixed list of mainland-China networks, and a refreshed list of domains that need the VPN.**
+**Auto-updating IPv4 split-tunnel lists for [AmneziaVPN](https://amnezia.org): a fixed list of mainland-China networks, and a refreshed list of websites outside China that need the VPN.**
 
 Refreshed every 6 hours by GitHub Actions · Published as GitHub Release assets · No server required
 
@@ -18,8 +18,35 @@ Refreshed every 6 hours by GitHub Actions · Published as GitHub Release assets 
 
 ---
 
+## Add to Amnezia
+
+Pick **one** of the two lists. They are alternatives, not a pair ([why](#2-import-into-amnezia)).
+
+| If you want… | Download | Amnezia mode |
+|---|---|---|
+| Mainland-China traffic to stay **outside** the VPN (fixed list, no refreshing needed) | [`cn-cidr.json`](https://github.com/shidevil/amnezia-china-split-tunnel/releases/latest/download/cn-cidr.json) | `Directly` |
+| Websites **outside China** that need the VPN (blocked or foreign; refreshed every 6 hours) | [`proxy.json`](https://github.com/shidevil/amnezia-china-split-tunnel/releases/latest/download/proxy.json) | `Via VPN` |
+
+**`proxy.json` must be imported in `Via VPN` mode.** It lists websites outside China, so in `Directly` mode they would skip the VPN, the opposite of what the list is for.
+
+1. **Put the file on the device that runs AmneziaVPN.** Amnezia imports from a local file, not from a link: open the download link in that device's browser, or download it on a computer and send it over.
+2. **Disconnect the VPN.** Amnezia does not let you change split tunneling while connected.
+3. **Open split tunneling for sites.** On the home screen tap the **Split tunneling** button (it reads "Split tunneling disabled" or "Split tunneling enabled"), then **Site-based split tunneling**.
+4. **Choose the mode** with the two-segment switch below the **Split tunneling** toggle: `Directly` for `cn-cidr.json`, `Via VPN` for `proxy.json`.
+5. **Import the file.** Tap **⋮** next to the "website or IP" field, choose `Replace site list` (or `Add imported sites to existing ones` to keep entries you added by hand) and select the downloaded `.json` file. Use `Replace site list` every time you refresh a list you imported before.
+6. **Switch split tunneling on** with the **Split tunneling** toggle at the top of the page, then connect.
+
+![Amnezia split tunneling: the ⋮ button, then Import, then Replace site list](https://docs.amnezia.org/assets/images/en_SPLIT_04-83d85c140d0ac43efbbe533dfc678d8a.png)
+
+*Screenshot from the [Amnezia documentation](https://docs.amnezia.org/documentation/instructions/vpn-split-tunneling). It shows an older layout of the app: the mode is a drop-down (`Directly` appears there as `Addresses from the list should not be accessed via VPN`, `Via VPN` as `Only the sites listed here will be accessed through the VPN`), and the import choices sit under **Import**. In the current release they are listed directly under **⋮**.*
+
+> **Not tested inside the app yet** (see [Limitations](#limitations-read-this-before-relying-on-the-lists)). Menu names follow the source code of Amnezia 5.1.1.10, the current release; other versions differ. If the VPN stops connecting after an import, your server's IP address is probably inside one of the imported ranges; Amnezia's FAQ says to find that range and remove it. If the app shows "Default server does not support split tunneling function", that server cannot use these lists.
+
+---
+
 ## Table of contents
 
+- [Add to Amnezia](#add-to-amnezia)
 - [Overview](#overview)
 - [Quick start](#quick-start)
 - [Available lists](#available-lists)
@@ -44,8 +71,8 @@ This project is built around that. It publishes exactly **two kinds of list**, a
 | | `cn-cidr.json` (fixed) | `proxy.json` (updated) |
 |---|---|---|
 | **What it is** | IPv4 networks (CIDR), copied from upstream and merged | domains, each with the IPv4 addresses DNS returned for it |
-| **Contents** | mainland-China networks, from two upstream lists | the GFW and proxy domain lists of Loyalsoldier |
-| **Amnezia mode** | `Addresses from the list must not go through VPN`: China stays outside the VPN | `Only the sites listed here will be accessed through the VPN` |
+| **Contents** | mainland-China networks, from two upstream lists | websites outside China that need the VPN: the GFW and proxy domain lists of Loyalsoldier |
+| **Amnezia mode** | `Directly`: China stays outside the VPN | `Via VPN` only: never import it in `Directly` mode |
 | **Goes stale in the app?** | barely: allocations change slowly | yes: DNS answers change, so re-import it from time to time |
 
 Every 6 hours a GitHub Actions workflow:
@@ -91,22 +118,18 @@ curl -fLO https://github.com/shidevil/amnezia-china-split-tunnel/releases/latest
 
 ### 2. Import into Amnezia
 
-> The steps below are based on the Amnezia client's split-tunneling feature; menu names vary slightly between versions and platforms, and this project's output has not been tested inside the app (see [Limitations](#limitations-read-this-before-relying-on-the-lists)).
-
-1. Copy the downloaded `.json` file to the device running AmneziaVPN.
-2. Open **Settings → Split tunneling → Sites**.
-3. Choose the mode that matches the list (see below).
-4. Open the "⋮" menu of the site list, choose how to import (`Replace site list` or `Add imported sites to existing ones`) and select the JSON file. Use `Replace site list` when you refresh a list you imported before.
-5. Enable split tunneling for sites and reconnect the VPN.
+The step-by-step instructions are at the top of this page: [Add to Amnezia](#add-to-amnezia). This section explains which mode fits which list.
 
 Which mode for which list:
 
 | Goal | Amnezia mode | List |
 |---|---|---|
-| Mainland-China traffic stays **outside** the VPN, everything else uses it | `Addresses from the list must not go through VPN` | `cn-cidr.json` |
-| **Only** blocked or foreign sites use the VPN, everything else is direct | `Only the sites listed here will be accessed through the VPN` | `proxy.json` |
+| Mainland-China traffic stays **outside** the VPN, everything else uses it | `Directly` | `cn-cidr.json` |
+| Websites **outside China** that need the VPN use it, everything else is direct | `Via VPN` | `proxy.json` |
 
-**The two files are alternatives, not a pair.** The app has one active mode at a time and keeps a separate site list for each mode, so loading both gains nothing: in the first mode `proxy.json` is ignored, in the second `cn-cidr.json` is. Which one to start with is your call. `cn-cidr.json` never needs refreshing, but it uses the mode that Amnezia's documentation recommends least (it describes `Addresses from the list must not go through VPN` as meant for local and ISP networks), with a few thousand entries that nobody has tested in the app. `proxy.json` uses the recommended `Only the sites listed here…` mode, but goes stale as DNS answers change. Try either one on your device before relying on it (see [Limitations](#limitations-read-this-before-relying-on-the-lists)).
+The current app (release 5.1.1.10) shows the two modes as segments called `Via VPN` and `Directly`. Older versions show a drop-down instead: `Directly` is `Addresses from the list should not be accessed via VPN` and `Via VPN` is `Only the sites listed here will be accessed through the VPN`.
+
+**The two files are alternatives, not a pair.** The app has one active mode at a time and keeps a separate site list for each mode, so loading both gains nothing: in `Directly` mode `proxy.json` is ignored, in `Via VPN` mode `cn-cidr.json` is. Which one to start with is your call. `cn-cidr.json` never needs refreshing, but it uses the mode that Amnezia's documentation recommends least (it recommends that mode only for local and ISP networks), with a few thousand entries that nobody has tested in the app. `proxy.json` uses the recommended `Via VPN` mode, but goes stale as DNS answers change. Try either one on your device before relying on it (see [Limitations](#limitations-read-this-before-relying-on-the-lists)).
 
 ## Available lists
 
@@ -115,8 +138,10 @@ All files carry the [Amnezia import format](#output-format). Upstream files are 
 | Output | Kind | Upstream files | What it contains |
 |---|---|---|---|
 | `cn-cidr.json` | `cidr` | [`chnroute.txt`](https://raw.githubusercontent.com/mayaxcn/china-ip-list/master/chnroute.txt) of [mayaxcn/china-ip-list](https://github.com/mayaxcn/china-ip-list), and [`CN.txt`](https://raw.githubusercontent.com/Xiaobei09/Rule-Provider/main/ruleset/geoip/QuantumultX/CN.txt) of [Xiaobei09/Rule-Provider](https://github.com/Xiaobei09/Rule-Provider) | Mainland-China IPv4 networks. A network is kept if **either** upstream lists it (a union), and the result is collapsed. IPv6 lines are dropped. |
-| `proxy.json` | `domains` | `gfw.txt` and `proxy.txt` from the `release` branch of [Loyalsoldier/surge-rules](https://github.com/Loyalsoldier/surge-rules/tree/release) | Domains that need the VPN, merged and de-duplicated, each with its current IPv4 addresses |
+| `proxy.json` | `domains` | `gfw.txt` and `proxy.txt` from the `release` branch of [Loyalsoldier/surge-rules](https://github.com/Loyalsoldier/surge-rules/tree/release) | Websites outside China that need the VPN: the domains of both files, merged and de-duplicated, each with its current IPv4 addresses. Import it in `Via VPN` mode only. |
 | `build-info.json` | n/a | n/a | Build metadata: timestamp, upstream commits, per-list counts, hashes |
+
+About `proxy.json`: it is not a list of every address outside China. It holds only the websites that the two Loyalsoldier files say need the VPN, and in `Via VPN` mode everything that is not on it goes out directly. In the build of 2026-11-24, 217 of its 21,015 distinct IP addresses (1.0%) fall inside the China networks of `cn-cidr.json`: the upstream files also carry a few China-hosted domains (149 of the 22,485 entries have at least one such address, for example alicloud.com). In `Via VPN` mode those still go through the VPN, which is harmless. In `Directly` mode the whole list would skip the VPN, so never import it there.
 
 About the union: when this was written the two upstream lists agreed on about 96% of the address space, and the union adds the 3.8% (13.6 million addresses) that only one of them claims. 5.8 million of those addresses were added to mayaxcn's list during the previous week and are not in the other list. The union was chosen on purpose: it keeps more mainland-China traffic out of the VPN. The cost is that if either upstream is wrong about one of those ranges, foreign traffic to that range bypasses the VPN. If you would rather keep only what both lists agree on, say so in an issue or point `config.yaml` at one URL.
 
@@ -501,7 +526,7 @@ Read from the client's source code ([amnezia-client](https://github.com/amnezia-
 - **Importing resolves nothing and reads the file once.** No way to subscribe to a URL was found, so refreshing a list means importing a new file by hand. The documentation says the same about domains: the app stores the addresses it has, and does not update them automatically.
 - **The desktop client re-resolves saved hostnames on every connect**, and only adds addresses: old ones are never removed. No equivalent was found in the mobile clients, and nothing refreshes while a connection is up. Whether an entry that starts with a dot (a suffix rule) is re-resolved is not known.
 - **One mode is active at a time**, each with its own saved list (see [Quick start](#quick-start)).
-- **The documentation steers away from the `cn-cidr.json` mode.** It calls `Only the sites listed here will be accessed through the VPN` the most effective and recommended method on Windows, iOS, macOS and Linux, and recommends `Addresses from the list must not go through VPN` only for local and ISP networks. Importing a country-sized list into the second mode is this project's design, not something Amnezia documents.
+- **The documentation steers away from the `cn-cidr.json` mode.** It calls the `Via VPN` mode (its "Mode 1") the most effective and recommended method on Windows, iOS, macOS and Linux, and recommends the `Directly` mode (its "Mode 2") only for local and ISP networks. Importing a country-sized list into `Directly` mode is this project's design, not something Amnezia documents.
 - **Every address and subnet becomes a route.** How many the client and the operating system cope with is not known. `cn-cidr.json` has a few thousand entries; try it on your device before relying on it.
 
 ### The fixed list (`cn-cidr.json`)

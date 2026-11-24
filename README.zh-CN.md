@@ -2,7 +2,7 @@
 
 # Amnezia 中国大陆分流列表
 
-**自动更新的 [AmneziaVPN](https://amnezia.org) IPv4 分流列表：一份固定的中国大陆网段列表，一份持续刷新的“需要走 VPN 的域名”列表。**
+**自动更新的 [AmneziaVPN](https://amnezia.org) IPv4 分流列表：一份固定的中国大陆网段列表，一份持续刷新的“中国大陆以外需要走 VPN 的网站”列表。**
 
 由 GitHub Actions 每 6 小时刷新 · 以 GitHub Release 资产发布 · 无需自建服务器
 
@@ -18,8 +18,35 @@
 
 ---
 
+## 添加到 Amnezia
+
+请从两个列表中**任选一个**。它们是二选一，而不是一对（[原因](#2-导入-amnezia)）。
+
+| 你想要… | 下载 | Amnezia 模式 |
+|---|---|---|
+| 中国大陆流量留在 VPN **之外**（固定列表，无需刷新） | [`cn-cidr.json`](https://github.com/shidevil/amnezia-china-split-tunnel/releases/latest/download/cn-cidr.json) | `Directly` |
+| **中国大陆以外**需要走 VPN 的网站（被封锁或境外站点；每 6 小时刷新） | [`proxy.json`](https://github.com/shidevil/amnezia-china-split-tunnel/releases/latest/download/proxy.json) | `Via VPN` |
+
+**`proxy.json` 必须导入 `Via VPN` 模式。** 它列出的是中国大陆以外的网站，如果导入 `Directly` 模式，这些网站会绕过 VPN，与这份列表的用途正好相反。
+
+1. **把文件放到运行 AmneziaVPN 的设备上。** Amnezia 从本地文件导入，而不是从链接导入：在该设备的浏览器中打开下载链接，或先在电脑上下载再发送过去。
+2. **先断开 VPN。** 连接状态下，Amnezia 不允许修改分流设置。
+3. **打开站点分流。** 在主屏幕点击 **Split tunneling** 按钮（显示为“Split tunneling disabled”或“Split tunneling enabled”），再点 **Site-based split tunneling**。
+4. **选择模式。** 使用 **Split tunneling** 开关下方的两段式切换：`cn-cidr.json` 选 `Directly`，`proxy.json` 选 `Via VPN`。
+5. **导入文件。** 点击“website or IP”输入框旁边的 **⋮**，选 `Replace site list`（如果想保留你手动添加的条目，选 `Add imported sites to existing ones`），再选择下载的 `.json` 文件。每次刷新之前导入过的列表时，请选 `Replace site list`。
+6. **打开分流开关：** 页面顶部的 **Split tunneling** 开关，然后连接 VPN。
+
+![Amnezia 分流界面：⋮ 按钮，然后是 Import，然后是 Replace site list（替换站点列表）](https://docs.amnezia.org/assets/images/en_SPLIT_04-83d85c140d0ac43efbbe533dfc678d8a.png)
+
+*截图来自 [Amnezia 官方文档](https://docs.amnezia.org/documentation/instructions/vpn-split-tunneling)。它展示的是 App 的旧版布局：模式是下拉菜单（`Directly` 在其中显示为 `Addresses from the list should not be accessed via VPN`，`Via VPN` 显示为 `Only the sites listed here will be accessed through the VPN`），导入选项位于 **Import** 之下。在当前版本中，这些选项直接列在 **⋮** 菜单中。*
+
+> **尚未在 App 内测试**（见[局限性](#局限性使用前请先阅读)）。菜单名称依据 Amnezia 5.1.1.10（当前版本）的源代码；其他版本可能不同。如果导入后 VPN 连不上，很可能是你的服务器 IP 地址落在了某个已导入的网段内；Amnezia 的 FAQ 建议找出该网段并将其删除。如果 App 显示“Default server does not support split tunneling function”，说明该服务器无法使用这些列表。
+
+---
+
 ## 目录
 
+- [添加到 Amnezia](#添加到-amnezia)
 - [项目简介](#项目简介)
 - [快速开始](#快速开始)
 - [可用列表](#可用列表)
@@ -44,8 +71,8 @@ AmneziaVPN 的分流功能路由的是 **IP 地址和子网**。它从不按域�
 | | `cn-cidr.json`（固定） | `proxy.json`（持续更新） |
 |---|---|---|
 | **是什么** | IPv4 网段（CIDR），取自上游并合并 | 域名，以及 DNS 为每个域名返回的 IPv4 地址 |
-| **内容** | 中国大陆网段，来自两份上游列表 | Loyalsoldier 的 GFW 与 proxy 域名列表 |
-| **Amnezia 模式** | `Addresses from the list must not go through VPN`：中国大陆流量留在 VPN 之外 | `Only the sites listed here will be accessed through the VPN` |
+| **内容** | 中国大陆网段，来自两份上游列表 | 中国大陆以外需要走 VPN 的网站：Loyalsoldier 的 GFW 与 proxy 域名列表 |
+| **Amnezia 模式** | `Directly`：中国大陆流量留在 VPN 之外 | 只能用 `Via VPN`：绝不要导入 `Directly` 模式 |
 | **在 App 内会过期吗？** | 几乎不会：地址分配变化很慢 | 会：DNS 应答会变，需要时不时重新导入 |
 
 GitHub Actions 工作流每 6 小时执行一次：
@@ -91,22 +118,18 @@ curl -fLO https://github.com/shidevil/amnezia-china-split-tunnel/releases/latest
 
 ### 2. 导入 Amnezia
 
-> 以下步骤基于 Amnezia 客户端的分流功能；不同版本和平台的菜单名称略有差异，并且本项目的输出**尚未在 App 内实际导入测试**（见[局限性](#局限性使用前请先阅读)）。
-
-1. 将下载的 `.json` 文件复制到运行 AmneziaVPN 的设备。
-2. 打开 **设置 → 分流（Split tunneling）→ 站点（Sites）**。
-3. 选择与该列表相匹配的模式（见下表）。
-4. 打开站点列表的“⋮”菜单，选择导入方式（`Replace site list` 或 `Add imported sites to existing ones`），再选择该 JSON 文件。刷新之前导入过的列表时，请选 `Replace site list`。
-5. 启用站点分流，并重新连接 VPN。
+具体的分步操作见本页顶部的[添加到 Amnezia](#添加到-amnezia)。本节说明哪种模式适合哪个列表。
 
 不同列表对应的模式：
 
 | 目标 | Amnezia 模式 | 列表 |
 |---|---|---|
-| 中国大陆流量留在 VPN **之外**，其余流量走 VPN | `Addresses from the list must not go through VPN` | `cn-cidr.json` |
-| **仅**被封锁/境外站点走 VPN，其余全部直连 | `Only the sites listed here will be accessed through the VPN` | `proxy.json` |
+| 中国大陆流量留在 VPN **之外**，其余流量走 VPN | `Directly` | `cn-cidr.json` |
+| 中国大陆**以外**需要走 VPN 的网站走 VPN，其余全部直连 | `Via VPN` | `proxy.json` |
 
-**这两个文件是二选一，而不是一对。** App 同一时间只有一种模式生效，并且每种模式各自保存一份站点列表，所以两个都导入没有意义：在第一种模式下 `proxy.json` 会被忽略，在第二种模式下 `cn-cidr.json` 会被忽略。先用哪一个由你决定。`cn-cidr.json` 永远不需要刷新，但它使用的是 Amnezia 文档最不推荐的模式（文档把 `Addresses from the list must not go through VPN` 描述为适用于本地和运营商网络），而且有几千个条目，没有人在 App 内测试过。`proxy.json` 使用的是推荐的 `Only the sites listed here…` 模式，但会随着 DNS 应答的变化而过期。在依赖其中任何一个之前，请先在你的设备上试一试（见[局限性](#局限性使用前请先阅读)）。
+当前版本的 App（5.1.1.10）把这两种模式显示为名为 `Via VPN` 和 `Directly` 的两个分段按钮。旧版本显示的是下拉菜单：`Directly` 对应 `Addresses from the list should not be accessed via VPN`，`Via VPN` 对应 `Only the sites listed here will be accessed through the VPN`。
+
+**这两个文件是二选一，而不是一对。** App 同一时间只有一种模式生效，并且每种模式各自保存一份站点列表，所以两个都导入没有意义：在 `Directly` 模式下 `proxy.json` 会被忽略，在 `Via VPN` 模式下 `cn-cidr.json` 会被忽略。先用哪一个由你决定。`cn-cidr.json` 永远不需要刷新，但它使用的是 Amnezia 文档最不推荐的模式（文档只推荐把该模式用于本地和运营商网络），而且有几千个条目，没有人在 App 内测试过。`proxy.json` 使用的是推荐的 `Via VPN` 模式，但会随着 DNS 应答的变化而过期。在依赖其中任何一个之前，请先在你的设备上试一试（见[局限性](#局限性使用前请先阅读)）。
 
 ## 可用列表
 
@@ -115,8 +138,10 @@ curl -fLO https://github.com/shidevil/amnezia-china-split-tunnel/releases/latest
 | 输出文件 | 类型 | 上游文件 | 内容 |
 |---|---|---|---|
 | `cn-cidr.json` | `cidr` | [mayaxcn/china-ip-list](https://github.com/mayaxcn/china-ip-list) 的 [`chnroute.txt`](https://raw.githubusercontent.com/mayaxcn/china-ip-list/master/chnroute.txt)，以及 [Xiaobei09/Rule-Provider](https://github.com/Xiaobei09/Rule-Provider) 的 [`CN.txt`](https://raw.githubusercontent.com/Xiaobei09/Rule-Provider/main/ruleset/geoip/QuantumultX/CN.txt) | 中国大陆 IPv4 网段。只要**任意一份**上游列出某个网段就保留（并集），然后合并。IPv6 行会被丢弃。 |
-| `proxy.json` | `domains` | [Loyalsoldier/surge-rules](https://github.com/Loyalsoldier/surge-rules/tree/release) `release` 分支的 `gfw.txt` 与 `proxy.txt` | 需要走 VPN 的域名，合并并去重，每个域名附带其当前的 IPv4 地址 |
+| `proxy.json` | `domains` | [Loyalsoldier/surge-rules](https://github.com/Loyalsoldier/surge-rules/tree/release) `release` 分支的 `gfw.txt` 与 `proxy.txt` | 中国大陆以外需要走 VPN 的网站：两份文件中的域名，合并并去重，每个域名附带其当前的 IPv4 地址。只能导入 `Via VPN` 模式。 |
 | `build-info.json` | 无 | 无 | 构建元数据：时间戳、上游 commit、各列表统计与哈希 |
+
+关于 `proxy.json`：它不是“中国大陆以外所有地址”的列表，只包含 Loyalsoldier 的两份文件认为需要走 VPN 的网站；在 `Via VPN` 模式下，不在列表里的一切都直连。在 2026-11-24 的构建中，它的 21,015 个不同 IP 地址里有 217 个（1.0%）落在 `cn-cidr.json` 的中国大陆网段内：上游文件里也有少量托管在国内的域名（22,485 个条目中有 149 个至少含一个这样的地址，例如 alicloud.com）。在 `Via VPN` 模式下，这些地址依然走 VPN，并无害处。在 `Directly` 模式下，整份列表都会绕过 VPN，所以绝不要在那里导入。
 
 关于并集：写作本文时，两份上游列表在约 96% 的地址空间上一致，并集额外加入了只有其中一份声称拥有的 3.8%（1360 万个地址）。其中 580 万个地址是 mayaxcn 的列表在前一周新增的，另一份列表并没有它们。选择并集是有意为之：它让更多中国大陆流量留在 VPN 之外。代价是，如果任一上游在这些网段上有误，发往这些网段的境外流量会绕过 VPN。如果你更想只保留两份列表都认同的部分，请提交 issue，或让 `config.yaml` 只指向一个 URL。
 
@@ -501,7 +526,7 @@ python -m src.main --source cn-cidr --out-dir dist --reports-dir reports   # 真
 - **导入时不做解析，且只读取一次文件。** 没有发现订阅 URL 的方式，所以刷新列表就意味着手动导入新文件。文档对域名也是这么说的：App 保存它手上的地址，并且不会自动更新。
 - **桌面客户端每次连接时会重新解析已保存的主机名**，并且只增加地址：旧地址不会被移除。在移动端客户端中没有发现类似机制，连接期间也不会刷新。以点开头的条目（后缀规则）是否会被重新解析，目前不清楚。
 - **同一时间只有一种模式生效**，每种模式各有自己保存的列表（见[快速开始](#快速开始)）。
-- **文档并不倾向于 `cn-cidr.json` 所用的模式。** 文档称 `Only the sites listed here will be accessed through the VPN` 是 Windows、iOS、macOS 和 Linux 上最有效且推荐的方法，而 `Addresses from the list must not go through VPN` 只推荐用于本地和运营商网络。把一份国家规模的列表导入第二种模式，是本项目自己的设计，而不是 Amnezia 文档中描述的用法。
+- **文档并不倾向于 `cn-cidr.json` 所用的模式。** 文档称 `Via VPN` 模式（文档中的“Mode 1”）是 Windows、iOS、macOS 和 Linux 上最有效且推荐的方法，而 `Directly` 模式（“Mode 2”）只推荐用于本地和运营商网络。把一份国家规模的列表导入 `Directly` 模式，是本项目自己的设计，而不是 Amnezia 文档中描述的用法。
 - **每个地址和子网都会变成一条路由。** 客户端和操作系统能承受多少条，目前不清楚。`cn-cidr.json` 有几千个条目；在依赖它之前，请先在你的设备上试一试。
 
 ### 固定列表（`cn-cidr.json`）
