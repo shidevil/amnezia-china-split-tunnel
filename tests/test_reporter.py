@@ -331,6 +331,12 @@ def test_summary_reports_problems_and_publish_decision():
     assert "direct" in ok
 
 
+def test_the_summary_announces_a_new_release_not_an_update_in_place():
+    ok = summary_markdown(info({"direct": record("direct")}), [], published=True)
+    assert "new release will be published" in ok.lower()
+    assert "assets will be updated" not in ok.lower()
+
+
 def test_asset_names_are_source_json_files_plus_build_info():
     assert asset_names(["direct", "tld-not-cn"]) == [
         "build-info.json",

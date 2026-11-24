@@ -81,9 +81,9 @@ Every 6 hours (01:37, 07:37, 13:37 and 19:37 UTC) a GitHub Actions workflow:
 3. **merges** the CIDR lists into the fewest networks covering the same addresses, and **resolves** each domain's IPv4 A records through public DNS resolvers,
 4. writes Amnezia-compatible JSON files,
 5. validates them against strict quality gates, and
-6. publishes them to a single rolling GitHub Release, so the download URLs never change. A list is re-published only when its content changed.
+6. publishes a new GitHub Release whenever a list changed. The newest release is always the one marked *Latest*, so the download URLs never change. A list whose content did not change is carried over from the previous release.
 
-If anything goes wrong while building (a DNS outage, an empty or truncated upstream file, a failed quality gate), the build fails and **the previous release stays untouched**. If the upload itself fails, it is retried and the previous assets are restored (see [Automation and releases](#automation-and-releases)).
+If anything goes wrong while building (a DNS outage, an empty or truncated upstream file, a failed quality gate), the build fails and **the previous release stays untouched**. If anything fails before the new release is published, that release is deleted (it is built as a draft, which nobody can see), so the previous release keeps being what users download (see [Automation and releases](#automation-and-releases)).
 
 ### Highlights
 
@@ -100,7 +100,7 @@ If anything goes wrong while building (a DNS outage, an empty or truncated upstr
 
 ### 1. Download
 
-The rolling release is tagged `latest`. These URLs are stable and need no authentication on a public repository:
+Every release is tagged with its build time (for example `2026-11-24-070000`), and the newest one is marked *Latest*. These URLs always serve the latest release, are stable, and need no authentication on a public repository:
 
 | List | Download |
 |---|---|
@@ -111,8 +111,10 @@ The rolling release is tagged `latest`. These URLs are stable and need no authen
 curl -fLO https://github.com/shidevil/amnezia-china-split-tunnel/releases/latest/download/cn-cidr.json
 ```
 
-> **Using a fork?** Replace `shidevil/amnezia-china-split-tunnel` with `<your-account>/<your-repository>` in every URL. The tag-pinned form
-> `https://github.com/<owner>/<repo>/releases/download/latest/cn-cidr.json` also works and always points at the tag named `latest`.
+> **Using a fork?** Replace `shidevil/amnezia-china-split-tunnel` with `<your-account>/<your-repository>` in every URL. To pin one specific build, use its tag:
+> `https://github.com/<owner>/<repo>/releases/download/<tag>/cn-cidr.json`. A tag stops working once its release is pruned.
+>
+> **Coming from an older version of this README?** It pointed at `releases/download/latest/<file>`, the release whose tag is `latest`. That release is no longer updated: use `releases/latest/download/<file>` (the links above) instead.
 
 ### 2. Import into Amnezia
 
@@ -240,7 +242,7 @@ flowchart LR
     C --> E["Generate JSON"]
     D --> E
     E --> F{"Quality gates<br/>and schema validation"}
-    F -->|"all sources pass"| G["GitHub Release 'latest'"]
+    F -->|"all sources pass"| G["New GitHub Release"]
     F -->|"any source fails"| H["Previous release kept"]
 ```
 
@@ -250,7 +252,7 @@ flowchart LR
    - *CIDR lists:* the three spellings seen upstream are accepted (`1.0.1.0/24`, `ip-cidr, 1.0.1.0/24` and `IP-CIDR,1.0.1.0/24,DIRECT,no-resolve`). IPv6 lines (including the QuantumultX `ip6-cidr` keyword) are skipped on purpose and counted. Invalid lines: host bits set, a prefix shorter than `/8`, any overlap with a private or special-purpose range, and any line that names a policy other than `DIRECT`. A listed network bypasses the VPN, so `IP-CIDR,8.8.8.0/24,PROXY` must not end up on the list, and a list containing `0.0.0.0/0` would route everything around the VPN.
 3. **Resolve (domain lists only).** All distinct names across all domain sources are resolved **once** (see [DNS resolution](#dns-resolution)). CIDR lists never touch DNS.
 4. **Generate and validate.** JSON is built deterministically, then checked twice: before writing, and again on the written files.
-5. **Decide.** Lists whose content hash is unchanged since the last release are not re-uploaded (unless forced).
+5. **Decide.** Lists whose content hash is unchanged since the last release are not taken from this build: the publish job copies the existing file from the previous release instead (unless forced). If no list changed, no release is made.
 6. **Publish.** A separate job with write permission uploads the files and verifies them.
 
 ### DNS resolution
@@ -319,7 +321,7 @@ sources:
       - https://raw.githubusercontent.com/Loyalsoldier/surge-rules/release/proxy.txt
 ```
 
-Disabling a source stops updating it. It drops out of `build-info.json` the next time a build publishes (disabling alone changes no list, so it does not trigger a publish; run the workflow with `force` to apply it immediately), but its old asset stays on the release until you delete it yourself (for example `gh release delete-asset latest proxy.json`). The same applies to a source you remove from the file.
+Disabling a source stops updating it. It drops out of `build-info.json` the next time a build publishes (disabling alone changes no list, so it does not trigger a publish; run the workflow with `force` to apply it immediately), and from then on new releases no longer contain its file, so its download link stops working. Older releases keep the file until they are pruned. The same applies to a source you remove from the file.
 
 ### Add a source
 
@@ -377,7 +379,7 @@ Unknown keys are rejected, so a typo such as `enabeld: false` can never silently
 | **Schedule** | `37 1,7,13,19 * * *` (01:37, 07:37, 13:37, 19:37 **UTC**). GitHub may delay scheduled runs under load; treat 6 hours as a refresh interval, not a guarantee. |
 | **Manual run** | *Actions → Build Amnezia lists → Run workflow* |
 | **Manual inputs** | `source`: `all` or a comma-separated list such as `cn-cidr,proxy` (a single-source build needs an existing release, so run a full build first); `force`: publish even if nothing changed |
-| **Release** | One rolling release, tag `latest`. Assets are replaced in place on every successful build, and only when their content changed. |
+| **Release** | A new release for every build in which a list changed, tagged with the build time. It is published all at once and marked *Latest*; nothing is ever replaced in place. Every release holds every list (the unchanged ones are carried over), so each is a complete snapshot. Only the newest releases are kept (`KEEP_RELEASES` in the workflow); older ones are deleted. People watching the repository for *Releases* are notified of each one. |
 | **Runtime** | On a GitHub-hosted runner (manual run, 2026-11-24) the whole run took about 2 min 40 s: the build job took 142 s, of which resolving the roughly 27,400 distinct names of `proxy.json` took about 130 s (about 210 names/s), and publishing took 12 s. The build above took 6 min 14 s on the developer's machine (about 76 names/s). The `max_qps: 300` cap puts a floor of about 1.5 minutes under it, and the job limit is 4 hours. A build of `cn-cidr` alone does no DNS at all. |
 
 The workflow has three jobs:
@@ -385,14 +387,14 @@ The workflow has three jobs:
 | Job | Permission | Role |
 |---|---|---|
 | `build` | `contents: read` | fetch, resolve, generate, validate; uploads the result as a workflow artifact |
-| `publish` | `contents: write` | runs only if `build` produced changes; backs up the current assets, uploads the lists and then `build-info.json` (with retries), restores the backup if every attempt fails, then verifies sizes |
+| `publish` | `contents: write` | runs only if `build` produced changes; completes the asset set from the latest release, checks every file against `build-info.json`, builds the new release as a draft (with retries), verifies it, publishes it as the latest in one step, then prunes old releases |
 | `keepalive` | `actions: write` | best-effort re-enable of the schedule (see below); can never fail a run |
 
 Every run writes a summary (per-list counts, failures) to the job summary page, and uploads `reports/` (failure lists) as a build artifact.
 
-**If a publish fails.** The publish job first backs up the current assets (and stops if that fails). It then uploads the changed lists and only afterwards `build-info.json`, retrying up to three times. Because the previous `build-info.json` stays in place until every list has arrived, a run that dies half-way cannot make the next run believe stale lists are current. If all attempts fail, the assets this run replaced are restored from the backup (also with retries) and the run is marked failed; assets the run never touched are left alone. `gh release upload --clobber` deletes an asset before uploading its replacement, so a download that happens during that window can briefly find a file missing or old; if the restore also fails, the run says so loudly and the next successful build republishes the affected lists (their content hash will differ from the old `build-info.json`; if a list happens to be identical to the old one, run the workflow with `force`).
+**If a publish fails.** Users only ever see a release once it is complete. The publish job first takes the lists that did not change from the latest release and checks every file against the SHA-256 recorded in `build-info.json`; a mismatch stops the run (run the workflow with `force` to rebuild every list). It then creates the new release as a draft, uploads every asset (retrying up to three times), verifies the sizes, and only then publishes it and marks it *Latest* in a single call. If anything fails before that call, the draft is deleted and the previous release stays the latest, untouched. A published release is never modified, and a failure after that call leaves the new release in place: it is already what users download. Old releases are pruned last, and a failure to prune never fails the build.
 
-**Single-source and unchanged builds.** A manual run with `source=proxy` rebuilds only `proxy.json` and merges its record into the existing `build-info.json`, so the other lists and their metadata stay as they were. Lists whose generated content is byte-identical to the previous release are not re-uploaded; for `cn-cidr.json` that is most runs.
+**Single-source and unchanged builds.** A manual run with `source=proxy` rebuilds only `proxy.json` and merges its record into the existing `build-info.json`, so the other lists and their metadata stay as they were. Lists whose generated content is byte-identical to the previous release are carried over from it as they are; for `cn-cidr.json` that is most runs.
 
 **Scheduled workflows can be switched off by GitHub.** In public repositories GitHub disables scheduled workflows after 60 days without repository activity. Because this project never commits to the repository, the `keepalive` job re-enables the workflow on every scheduled run. This is a best-effort measure whose effect on GitHub's inactivity timer is not guaranteed; if the schedule is ever disabled, any push or a manual run revives it.
 
@@ -469,7 +471,7 @@ To test a resolver by hand: `dig @1.1.1.1 +short A example.com`.
 
 3. **Enable Actions.** Open the *Actions* tab; if GitHub asks, click *"I understand my workflows, go ahead and enable them"* (forks start with workflows disabled).
 4. **Check the token permissions.** The workflows declare their own permissions, so the default setting is fine. If your organisation enforces a read-only cap, set *Settings → Actions → General → Workflow permissions → Read and write permissions*.
-5. **Run it once.** *Actions → Build Amnezia lists → Run workflow* (leave the defaults). This creates the `latest` release; scheduled runs take over from there. Scheduled runs only fire from the default branch.
+5. **Run it once.** *Actions → Build Amnezia lists → Run workflow* (leave the defaults). This creates the first release; scheduled runs take over from there. Scheduled runs only fire from the default branch.
 6. **Use the links** from [Quick start](#quick-start), after replacing the owner and repository name.
 
 ## Local development

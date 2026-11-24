@@ -31,9 +31,6 @@ defaults:
   run:
     shell: bash
 
-env:
-  RELEASE_TAG: latest
-
 jobs:
   build:
     name: Resolve and validate
@@ -61,7 +58,8 @@ jobs:
           GH_REPO: ${{ github.repository }}
         run: |
           mkdir -p previous
-          gh release download "$RELEASE_TAG" --pattern build-info.json --dir previous \
+          # No tag: the release GitHub marks as the latest, which is what users download.
+          gh release download --pattern build-info.json --dir previous \
             || echo "No previous release (first run?): every list will be published."
 
       - name: Build
@@ -111,120 +109,172 @@ jobs:
           retention-days: 14
 
   publish:
-    name: Publish to the rolling release
+    name: Publish a new release
     needs: build
     if: needs.build.outputs.publish == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
-      contents: write # create/update the release and its assets
+      contents: write # create the release, and delete the ones that fall out of the retention window
     env:
       GH_TOKEN: ${{ github.token }}
       GH_REPO: ${{ github.repository }}
+      KEEP_RELEASES: 28 # four builds a day: about a week of releases to roll back to
     steps:
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
         with:
           name: release-assets
           path: staging
 
-      - name: Create the release if it does not exist
+      # Every release must hold every list, or `releases/latest/download/<list>` would stop
+      # working the moment this release becomes the latest. The build only stages what
+      # changed, so the other lists are taken from the release users get today.
+      - name: Complete the asset set
         run: |
-          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
-            gh release create "$RELEASE_TAG" \
-              --title "Latest lists" \
-              --notes-file staging/release-notes.md \
-              --target "$GITHUB_SHA" \
-              --latest
-          fi
+          jq -r '.sources[].file' staging/build-info.json > expected.txt
+          while read -r name; do
+            [ -f "staging/$name" ] && continue
+            echo "$name did not change: taking it from the latest release"
+            gh release download --pattern "$name" --dir staging || {
+              echo "::error::$name was not rebuilt and is not on the latest release. Run this workflow with source=all and force=true."
+              exit 1
+            }
+          done < expected.txt
 
-      # `gh release upload --clobber` deletes an asset before uploading its replacement,
-      # so keep a copy to restore from. If the release has assets the backup must
-      # succeed: failing here, before anything is touched, is always safe.
-      - name: Back up the current assets
+      # build-info.json is the one list of what a release holds. Publish exactly that, and
+      # only if every file is byte for byte what it says it is.
+      - name: Check every asset against build-info.json
         run: |
-          mkdir backup
-          count=$(gh release view "$RELEASE_TAG" --json assets --jq '.assets | length')
-          if [ "$count" -gt 0 ]; then
-            gh release download "$RELEASE_TAG" --dir backup
-          fi
-
-      - name: Upload assets (replacing existing ones)
-        run: |
-          # `gh` uploads the files of one command concurrently, so build-info.json is sent
-          # in a second command, after every list. If a run dies half-way, the release
-          # still carries the OLD build-info.json, whose hashes no longer match the new
-          # lists, so the next run republishes them instead of trusting a stale record.
-          lists=()
-          for file in staging/*.json; do
-            [ "$(basename "$file")" = build-info.json ] || lists+=("$file")
-          done
-          upload() {
-            for attempt in 1 2 3; do
-              if { [ ${#lists[@]} -eq 0 ] || gh release upload "$RELEASE_TAG" "${lists[@]}" --clobber; } \
-                && gh release upload "$RELEASE_TAG" staging/build-info.json --clobber; then
-                return 0
-              fi
-              echo "::warning::upload attempt $attempt failed"
-              sleep $((attempt * 15))
-            done
-            return 1
-          }
-          restore() {
-            # Put back only what this run may have deleted: the files it staged. Every
-            # other asset was never touched, and re-uploading it (delete, then upload)
-            # could only risk losing it. build-info.json goes in its own command, and is
-            # attempted even if the lists cannot be restored: the old file's hashes no
-            # longer match the half-published lists, so the next build republishes them.
-            restorable=()
-            for file in "${lists[@]}"; do
-              if [ -f "backup/$(basename "$file")" ]; then
-                restorable+=("backup/$(basename "$file")")
-              fi
-            done
-            lists_done=false
-            info_done=false
-            [ ${#restorable[@]} -eq 0 ] && lists_done=true
-            [ -f backup/build-info.json ] || info_done=true
-            for attempt in 1 2 3; do
-              if ! $lists_done && gh release upload "$RELEASE_TAG" "${restorable[@]}" --clobber; then
-                lists_done=true
-              fi
-              if ! $info_done && gh release upload "$RELEASE_TAG" backup/build-info.json --clobber; then
-                info_done=true
-              fi
-              if $lists_done && $info_done; then return 0; fi
-              sleep $((attempt * 15))
-            done
-            return 1
-          }
-          if ! upload; then
-            echo "::error::Uploading failed after 3 attempts; restoring the previous assets."
-            if compgen -G "backup/*" >/dev/null; then
-              restore || echo "::error::RESTORE FAILED: the release may lack assets until the next successful build."
+          jq -r '.sources[] | "\(.file) \(.output_sha256)"' staging/build-info.json > expected.txt
+          problems=0
+          while read -r name want; do
+            if [ ! -f "staging/$name" ]; then
+              echo "::error::$name is listed in build-info.json but is missing"
+              problems=1
+              continue
             fi
+            got=$(sha256sum "staging/$name" 2>/dev/null || shasum -a 256 "staging/$name")
+            if [ "${got%% *}" = "$want" ]; then
+              echo "ok  $name"
+            else
+              echo "::error::$name does not match the hash in build-info.json. Run this workflow with source=all and force=true to rebuild it."
+              problems=1
+            fi
+          done < expected.txt
+          for file in staging/*.json; do
+            name=$(basename "$file")
+            [ "$name" = build-info.json ] && continue
+            cut -d' ' -f1 expected.txt | grep -qxF "$name" \
+              || { echo "::error::$name is not listed in build-info.json"; problems=1; }
+          done
+          [ "$problems" = 0 ]
+
+      # Tags are timestamps, so sorting the names sorts the releases by age.
+      - name: Name the release
+        run: echo "RELEASE_TAG=$(date -u +%Y-%m-%d-%H%M%S)" >> "$GITHUB_ENV"
+
+      # The release is built as a DRAFT, which users cannot see. Nothing public changes until
+      # the one call that publishes it, so a run that dies before then leaves users with the
+      # release they already have. `gh release create` makes the draft and then uploads; if it
+      # dies in between, the retry must top up that draft. `create` does not notice an
+      # existing draft: it would make a second one with the same tag, and from then on every
+      # lookup by tag is ambiguous. So the draft is looked up first, and a lookup that fails
+      # counts as a failed attempt instead of as "no draft yet".
+      - name: Create the draft release with every asset
+        run: |
+          make_draft() {
+            drafts=$(gh release list --limit 500 --json tagName,isDraft \
+              --jq "[.[] | select(.isDraft and .tagName == \"$RELEASE_TAG\")] | length") || return 1
+            if [ "$drafts" = 0 ]; then
+              gh release create "$RELEASE_TAG" staging/*.json --draft \
+                --title "Lists built $(date -u '+%Y-%m-%d %H:%M UTC')" \
+                --notes-file staging/release-notes.md --target "$GITHUB_SHA"
+            elif [ "$drafts" = 1 ]; then
+              gh release upload "$RELEASE_TAG" staging/*.json --clobber
+            else
+              echo "::error::$drafts drafts share the tag $RELEASE_TAG; refusing to guess which one to use"
+              exit 1
+            fi
+          }
+          for attempt in 1 2 3; do
+            if make_draft; then exit 0; fi
+            echo "::warning::attempt $attempt failed"
+            sleep $((attempt * 15))
+          done
+          echo "::error::could not create the draft release"
+          exit 1
+
+      # Publish, this check and the cleanup all find the release by tag, so there must be
+      # exactly one release with it. (`create` can succeed while its answer is lost.)
+      - name: Verify the draft before publishing it
+        run: |
+          drafts=$(gh release list --limit 500 --json tagName,isDraft \
+            --jq "[.[] | select(.isDraft and .tagName == \"$RELEASE_TAG\")] | length")
+          if [ "$drafts" != 1 ]; then
+            echo "::error::expected exactly one draft with the tag $RELEASE_TAG, found $drafts"
             exit 1
           fi
-
-      - name: Update the release notes and mark it as the latest release
-        run: |
-          gh release edit "$RELEASE_TAG" \
-            --title "Latest lists" \
-            --notes-file staging/release-notes.md \
-            --draft=false --prerelease=false --latest
-
-      - name: Verify the published assets
-        run: |
           for file in staging/*.json; do
             name=$(basename "$file")
             expected=$(($(wc -c < "$file")))
             actual=$(gh release view "$RELEASE_TAG" --json assets \
               --jq ".assets[] | select(.name == \"$name\") | .size")
             if [ "$actual" != "$expected" ]; then
-              echo "::error::$name on the release is ${actual:-missing} bytes, expected $expected"
+              echo "::error::$name on the draft is ${actual:-missing} bytes, expected $expected"
               exit 1
             fi
             echo "ok  $name ($expected bytes)"
           done
+
+      # One call: published and marked latest together.
+      - name: Publish the release as the latest
+        run: gh release edit "$RELEASE_TAG" --draft=false --prerelease=false --latest
+
+      - name: Confirm the new release is the latest
+        run: |
+          latest=$(gh release view --json tagName --jq .tagName)
+          if [ "$latest" != "$RELEASE_TAG" ]; then
+            echo "::error::the latest release is $latest, not $RELEASE_TAG"
+            exit 1
+          fi
+          echo "latest release: $latest"
+
+      # Only published releases this workflow made (timestamp tags) are ever touched: never
+      # the legacy `latest` release, never one made by hand, never the latest or the one just
+      # published, and never a draft (invisible to users, so a leftover costs nothing, and
+      # deleting by tag is ambiguous when a published release shares it).
+      - name: Prune old releases
+        continue-on-error: true # tidying the history must never fail a build
+        run: |
+          # `tail -n +1` keeps every line, so a limit of 0 or an empty one would delete all.
+          # Leading zeros are refused too: 00 is zero, and 08 is an error in shell arithmetic.
+          case "$KEEP_RELEASES" in
+            '' | *[!0-9]* | 0*)
+              echo "::error::KEEP_RELEASES must be a positive whole number, not '$KEEP_RELEASES'"
+              exit 1
+              ;;
+          esac
+          pattern='^[0-9]{4}-[0-9]{2}-[0-9]{2}-[0-9]{6}$'
+          latest=$(gh release view --json tagName --jq .tagName)
+          gh release list --limit 500 --exclude-drafts --json tagName --jq '.[].tagName' \
+            | { grep -E "$pattern" || true; } | sort -r \
+            | tail -n +"$((KEEP_RELEASES + 1))" > old.txt
+          while read -r tag; do
+            if [ "$tag" = "$latest" ] || [ "$tag" = "$RELEASE_TAG" ]; then continue; fi
+            gh release delete "$tag" --yes --cleanup-tag \
+              || echo "::warning::could not delete release $tag"
+          done < old.txt
+
+      # Only ever a DRAFT: if the job failed after publishing (the prune, the confirmation),
+      # the release is already what users download and must stay.
+      - name: Delete the draft if the run did not finish
+        if: (failure() || cancelled()) && env.RELEASE_TAG != ''
+        run: |
+          draft=$(gh release view "$RELEASE_TAG" --json isDraft --jq .isDraft 2>/dev/null || true)
+          if [ "$draft" = true ]; then
+            gh release delete "$RELEASE_TAG" --yes \
+              || echo "::warning::could not delete the draft $RELEASE_TAG"
+          fi
 
   keepalive:
     # GitHub disables scheduled workflows in public repositories after 60 days without

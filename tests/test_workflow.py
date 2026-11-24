@@ -73,11 +73,82 @@ def test_publish_requires_a_successful_build_that_asked_for_publishing():
     assert "needs.build.outputs.publish == 'true'" in publish["if"]
 
 
-def test_the_rolling_release_is_marked_latest_and_not_a_prerelease():
-    text = steps_text(load("build.yml")["jobs"]["publish"])
-    assert "--latest" in text
-    assert "--prerelease=false" in text
-    assert load("build.yml")["env"]["RELEASE_TAG"] == "latest"
+PUBLISH_ORDER = [
+    "Complete the asset set",
+    "Check every asset",
+    "Name the release",
+    "Create the draft",
+    "Verify the draft",
+    "Publish the release",
+    "Confirm",
+    "Prune",
+]
+
+
+def publish_steps():
+    return load("build.yml")["jobs"]["publish"]["steps"]
+
+
+def publish_step(prefix):
+    return next(s for s in publish_steps() if s.get("name", "").startswith(prefix))
+
+
+def test_the_publish_steps_run_in_the_order_that_keeps_users_safe():
+    names = [s.get("name", "") for s in publish_steps()]
+    positions = [next(i for i, n in enumerate(names) if n.startswith(p)) for p in PUBLISH_ORDER]
+    assert positions == sorted(positions)
+
+
+def test_a_new_release_is_built_as_a_draft_and_flipped_to_latest_in_one_command():
+    # Until the flip nothing public changes, so a run that dies earlier leaves users with the
+    # release they already have. The flip is one call: there is no moment with a public
+    # release that is not yet marked latest.
+    assert "--draft" in publish_step("Create the draft")["run"]
+    assert "--latest" not in publish_step("Create the draft")["run"]
+    flip = publish_step("Publish the release")["run"]
+    for flag in ("--draft=false", "--prerelease=false", "--latest"):
+        assert flag in flip
+
+
+def test_a_release_that_users_can_see_is_never_modified():
+    names = [s.get("name", "") for s in publish_steps()]
+    flip = next(i for i, n in enumerate(names) if n.startswith("Publish the release"))
+    for step in publish_steps()[flip:]:
+        run = step.get("run", "")
+        assert "gh release upload" not in run, step["name"]
+        assert "gh release create" not in run, step["name"]
+
+
+def test_the_old_rolling_tag_is_no_longer_how_any_step_finds_the_release():
+    # `gh release download latest` means the release whose TAG is "latest": the frozen
+    # legacy release, not the one GitHub marks as the latest.
+    workflow = load("build.yml")
+    assert "RELEASE_TAG" not in workflow.get("env", {})
+    every_script = "\n".join(
+        step.get("run", "") for job in workflow["jobs"].values() for step in job["steps"]
+    )
+    assert not re.search(r"gh release \w+ \"?latest\b", every_script)
+
+
+def test_pruning_is_best_effort_and_cleanup_only_runs_for_a_run_that_did_not_finish():
+    assert publish_step("Prune")["continue-on-error"] is True
+    cleanup = publish_step("Delete the draft")
+    assert "failure()" in cleanup["if"] and "cancelled()" in cleanup["if"]
+    assert "RELEASE_TAG" in cleanup["if"]  # nothing to clean up before the release was named
+
+
+def test_builds_never_overlap_because_each_one_builds_on_the_latest_release():
+    # Unchanged lists are carried over from the release that is the latest when the publish
+    # job starts. Two overlapping runs would both start from the same release, and the one
+    # that publishes second would silently drop the lists the first one changed.
+    concurrency = load("build.yml")["concurrency"]
+    assert concurrency["group"]
+    assert concurrency["cancel-in-progress"] is False
+
+
+def test_enough_releases_are_kept_to_roll_back_to():
+    keep = int(load("build.yml")["jobs"]["publish"]["env"]["KEEP_RELEASES"])
+    assert keep >= 2  # the new release and at least one to go back to
 
 
 def test_user_controlled_inputs_never_appear_inside_shell_scripts():

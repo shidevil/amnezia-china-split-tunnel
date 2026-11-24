@@ -1,23 +1,35 @@
-"""Run the workflow's real shell steps against a stub ``gh`` that models a release.
+"""Run the workflow's real shell steps against a stub ``gh`` that models a repository's releases.
 
-The publish job is the only place that can damage the live release, and it cannot be
-exercised without GitHub. These tests extract the exact ``run:`` scripts from
-build.yml and execute them (as GitHub does: ``bash -eo pipefail``) against a stub
-``gh`` whose "release" is a directory of files. The stub deliberately reproduces the
-behaviours that make publishing dangerous:
+The publish job is the only place that can damage what users download, and it cannot be
+exercised without GitHub. These tests extract the exact ``run:`` scripts from build.yml and
+execute them (as GitHub does: ``bash -eo pipefail``) against a stub ``gh`` whose "repository"
+is a directory of releases. The stub reproduces the behaviours the publish job has to
+respect:
 
-* ``release upload --clobber`` DELETES the existing asset before uploading, so a failed
-  upload leaves the asset missing;
-* one command's files are processed independently, so some can fail while others land;
-* failures can be injected for the first n calls (``FAIL_UPLOADS``), for chosen call
-  numbers (``FAIL_CALLS``), for chosen files (``FAIL_FILES``) or only when a chosen
-  file is uploaded from ``backup/`` (``FAIL_BACKUP_FILES``, i.e. during a restore).
+* a release is either a draft (invisible to users, freely editable) or published, and
+  exactly one published release is "latest" (what ``releases/latest/download/...`` serves);
+* uploading to a PUBLISHED release fails, so any script that tries to modify a release users
+  can already see breaks its test;
+* ``gh release view``, ``download`` and ``edit`` without a tag act on the latest release;
+* ``gh release create --draft`` does NOT notice that a draft with that tag already exists:
+  like the real CLI it succeeds and makes a second draft. The stub records that in a
+  ``DUPLICATE_DRAFT`` file, because every later lookup by tag is then ambiguous and a
+  cleanup could delete the wrong release. ``create`` can also die after making the draft;
+* failures can be injected: the first n create/upload calls (``FAIL_CREATE``,
+  ``FAIL_UPLOADS``), a create that dies after the draft exists (``FAIL_CREATE_AFTER_DRAFT``),
+  chosen lookups (``FAIL_LOOKUP_ON``: call numbers of ``release view``/``release list``,
+  counted together), ``FAIL_EDIT``, an edit that publishes without marking the release
+  latest (``EDIT_WITHOUT_LATEST``), releases whose deletion fails (``FAIL_DELETE``) and a
+  release that is listed twice (``LISTED_TWICE``: the two-drafts-one-tag mess).
 
-What it does not model: network errors mid-file, rate limits, GitHub's eventual
-consistency, and the exact wording of real error messages.
+What it does not model: network errors mid-file, rate limits, GitHub's eventual consistency
+and the exact wording of real error messages. The first real run is the final check.
 """
 
+import hashlib
+import json
 import os
+import re
 import shutil
 import stat
 import subprocess
@@ -29,84 +41,179 @@ import yaml
 WORKFLOW = Path(__file__).resolve().parent.parent / ".github" / "workflows" / "build.yml"
 BASH = shutil.which("bash")
 
-# These guard the one step that can damage the live release, so on CI a missing tool is a
-# failure, not a skip (ubuntu-latest ships both). Elsewhere they skip politely.
+# These guard the step that decides what users download, so on CI a missing tool is a
+# failure, not a skip (ubuntu-latest ships all of them). Elsewhere they skip politely.
+HAS_SHA = shutil.which("sha256sum") or shutil.which("shasum")  # Linux / macOS
 pytestmark = pytest.mark.skipif(
-    (BASH is None or shutil.which("jq") is None) and not os.environ.get("CI"),
-    reason="needs bash and jq (both on ubuntu-latest)",
+    (BASH is None or shutil.which("jq") is None or not HAS_SHA) and not os.environ.get("CI"),
+    reason="needs bash, jq and sha256sum or shasum (all on ubuntu-latest)",
 )
 
 STUB_GH = r"""#!/bin/bash
 echo "gh $*" >> "$SIM_LOG"
 group="$1 $2"
 shift 2
-tag="${1:-}"
+R="$SIM_REPO/releases"
+mkdir -p "$R" "$SIM_COUNTS"
 
-assets_json() {
-  for f in "$SIM_RELEASE"/*; do
+count() {
+  local n; n=$(cat "$SIM_COUNTS/$1" 2>/dev/null || echo 0); n=$((n + 1))
+  echo "$n" > "$SIM_COUNTS/$1"; echo "$n"
+}
+
+pos=(); json=""; jq_expr=""; dir="."; pattern=""; draft=""; latest=""; no_drafts=0
+while [ $# -gt 0 ]; do
+  case "$1" in
+    --json) json="$2"; shift ;;
+    --jq) jq_expr="$2"; shift ;;
+    --dir) dir="$2"; shift ;;
+    --pattern) pattern="$2"; shift ;;
+    --limit|--title|--notes-file|--target) shift ;;
+    --draft) draft=1 ;;
+    --draft=false) draft=0 ;;
+    --latest) latest=1 ;;
+    --exclude-drafts) no_drafts=1 ;;
+    --*) ;;
+    *) pos+=("$1") ;;
+  esac
+  shift
+done
+tag="${pos[0]:-}"
+files=("${pos[@]:1}")
+latest_tag() { cat "$SIM_REPO/latest" 2>/dev/null || true; }
+lookup_fails() {  # FAIL_LOOKUP_ON="2 5": the 2nd and 5th view/list call fail
+  local n; n=$(count lookup)
+  [[ " ${FAIL_LOOKUP_ON:-} " == *" $n "* ]]
+}
+
+describe() {  # one release as JSON
+  local t="$1" d=false
+  [ -f "$R/$t/draft" ] && d=true
+  for f in "$R/$t"/assets/*; do
     [ -f "$f" ] || continue
     printf '%s\t%s\n' "$(basename "$f")" "$(wc -c < "$f" | tr -d ' ')"
-  done | jq -R -s '{assets: (split("\n") | map(select(length > 0) | split("\t")
-    | {name: .[0], size: (.[1] | tonumber)}))}'
+  done | jq -R -s --arg tag "$t" --argjson draft "$d" --arg created "$(cat "$R/$t/created")" \
+    '{tagName: $tag, isDraft: $draft, createdAt: $created,
+      assets: (split("\n") | map(select(length > 0) | split("\t")
+        | {name: .[0], size: (.[1] | tonumber)}))}'
 }
 
 case "$group" in
-  "release upload")
-    shift  # the tag
-    files=()
-    for arg in "$@"; do
-      case "$arg" in --*) ;; *) files+=("$arg") ;; esac
-    done
-    # Like gh: at least one file, and every file must exist, checked BEFORE anything is
-    # deleted. (A call that dies here leaves the release untouched.)
-    if [ ${#files[@]} -eq 0 ]; then echo "accepts at least 2 arg(s)" >&2; exit 1; fi
-    for arg in "${files[@]}"; do
-      [ -f "$arg" ] || { echo "open $arg: no such file or directory" >&2; exit 1; }
-    done
-    n=$(cat "$SIM_STATE" 2>/dev/null || echo 0); n=$((n + 1)); echo "$n" > "$SIM_STATE"
-    rc=0
-    for arg in "${files[@]}"; do
-      name=$(basename "$arg")
-      rm -f "$SIM_RELEASE/$name"            # --clobber deletes first ...
-      if [ "$n" -le "${FAIL_UPLOADS:-0}" ] || [[ " ${FAIL_CALLS:-} " == *" $n "* ]] \
-          || [[ " ${FAIL_FILES:-} " == *" $name "* ]] \
-          || [[ "$arg" == backup/* && " ${FAIL_BACKUP_FILES:-} " == *" $name "* ]]; then
-        rc=1                                  # ... so a failed upload leaves it missing
-      else
-        cp "$arg" "$SIM_RELEASE/$name"
+  "release create")
+    n=$(count create)
+    if [ "$n" -le "${FAIL_CREATE:-0}" ]; then echo "HTTP 502" >&2; exit 1; fi
+    [ -n "$tag" ] || { echo "tag required" >&2; exit 1; }
+    if [ -d "$R/$tag" ]; then
+      if [ "$draft" = 1 ] && [ -f "$R/$tag/draft" ]; then
+        touch "$SIM_REPO/DUPLICATE_DRAFT"; exit 0
       fi
-    done
-    exit $rc
+      echo "tag '$tag' is taken by a published release" >&2; exit 1
+    fi
+    for f in "${files[@]}"; do [ -f "$f" ] || { echo "open $f: no such file" >&2; exit 1; }; done
+    mkdir -p "$R/$tag/assets"
+    echo "2026-11-24T00:00:00Z" > "$R/$tag/created"
+    [ "$draft" = 1 ] && touch "$R/$tag/draft"
+    if [ "$n" -le "${FAIL_CREATE_AFTER_DRAFT:-0}" ]; then echo "upload failed" >&2; exit 1; fi
+    for f in "${files[@]}"; do cp "$f" "$R/$tag/assets/"; done
+    if [ "$draft" != 1 ] && [ "$latest" = 1 ]; then echo "$tag" > "$SIM_REPO/latest"; fi
+    ;;
+  "release upload")
+    n=$(count upload)
+    if [ "$n" -le "${FAIL_UPLOADS:-0}" ]; then echo "HTTP 502" >&2; exit 1; fi
+    [ -d "$R/$tag" ] || { echo "release not found" >&2; exit 1; }
+    [ -f "$R/$tag/draft" ] || { echo "published releases cannot be modified" >&2; exit 1; }
+    for f in "${files[@]}"; do [ -f "$f" ] || { echo "open $f: no such file" >&2; exit 1; }; done
+    for f in "${files[@]}"; do cp "$f" "$R/$tag/assets/"; done
     ;;
   "release view")
-    [ "${NO_RELEASE:-0}" = 1 ] && exit 1
-    [ "${FAIL_VIEW:-0}" = 1 ] && exit 1
-    json=0; jq_expr=""
-    while [ $# -gt 0 ]; do
-      case "$1" in --json) json=1 ;; --jq) jq_expr="$2"; shift ;; esac
-      shift
-    done
-    if [ "$json" = 1 ]; then assets_json | jq -r "$jq_expr"; fi
-    exit 0
+    lookup_fails && { echo "HTTP 502" >&2; exit 1; }
+    [ -n "$tag" ] || tag=$(latest_tag)
+    [ -n "$tag" ] && [ -d "$R/$tag" ] || { echo "release not found" >&2; exit 1; }
+    describe "$tag" | jq -r "${jq_expr:-.}"
+    ;;
+  "release edit")
+    [ "${FAIL_EDIT:-0}" = 1 ] && exit 1
+    [ -d "$R/$tag" ] || { echo "release not found" >&2; exit 1; }
+    [ "$draft" = 0 ] && rm -f "$R/$tag/draft"
+    if [ "$latest" = 1 ] && [ ! -f "$R/$tag/draft" ] && [ "${EDIT_WITHOUT_LATEST:-0}" != 1 ]; then
+      echo "$tag" > "$SIM_REPO/latest"
+    fi
     ;;
   "release download")
-    [ "${FAIL_DOWNLOAD:-0}" = 1 ] && exit 1
-    dir="."; pattern="*"
-    while [ $# -gt 0 ]; do
-      case "$1" in --dir) dir="$2"; shift ;; --pattern) pattern="$2"; shift ;; esac
-      shift
-    done
-    mkdir -p "$dir"
-    found=0
-    for f in "$SIM_RELEASE"/$pattern; do
+    [ -n "$tag" ] || tag=$(latest_tag)
+    [ -n "$tag" ] && [ -d "$R/$tag" ] || { echo "release not found" >&2; exit 1; }
+    [ -n "$pattern" ] || { echo "specify --pattern" >&2; exit 1; }
+    mkdir -p "$dir"; found=0
+    for f in "$R/$tag"/assets/$pattern; do
       [ -f "$f" ] && { cp "$f" "$dir/"; found=1; }
     done
-    [ "$found" = 1 ] || exit 1
-    exit 0
+    [ "$found" = 1 ] || { echo "no assets match" >&2; exit 1; }
+    ;;
+  "release list")
+    lookup_fails && { echo "HTTP 502" >&2; exit 1; }
+    for d in "$R"/*/; do
+      [ -d "$d" ] || continue
+      t=$(basename "$d")
+      if [ "$no_drafts" = 1 ] && [ -f "$d/draft" ]; then continue; fi
+      describe "$t"
+      [[ " ${LISTED_TWICE:-} " == *" $t "* ]] && describe "$t"
+    done | jq -s "." | jq -r "${jq_expr:-.}"
+    ;;
+  "release delete")
+    [ -d "$R/$tag" ] || { echo "release not found" >&2; exit 1; }
+    [[ " ${FAIL_DELETE:-} " == *" $tag "* ]] && { echo "HTTP 500" >&2; exit 1; }
+    rm -rf "${R:?}/$tag"
+    [ "$(latest_tag)" = "$tag" ] && rm -f "$SIM_REPO/latest"
     ;;
 esac
 exit 0
 """
+
+# ---- fixtures ---------------------------------------------------------------------------
+
+OLD_TAG = "2026-11-24-010000"  # the release users get today
+NEW_TAG = "2026-11-24-070000"  # the release this run is building
+LONG_AGO = "2020-01-01T00:00:00Z"
+
+
+def sha(text):
+    return hashlib.sha256(text.encode()).hexdigest()
+
+
+def build_info(**lists):
+    """A build-info.json that describes ``name=content`` lists, the way the generator does."""
+    sources = {n: {"file": f"{n}.json", "output_sha256": sha(c)} for n, c in lists.items()}
+    return json.dumps({"sources": sources})
+
+
+def release(assets, *, draft=False, created=LONG_AGO):
+    return {"assets": assets, "draft": draft, "created": created}
+
+
+# The release users get today: three lists and a build-info.json that describes them.
+OLD = {
+    "direct.json": "old-direct",
+    "proxy.json": "old-proxy",
+    "apple.json": "old-apple",
+    "build-info.json": build_info(direct="old-direct", proxy="old-proxy", apple="old-apple"),
+}
+# This run rebuilt direct and proxy; apple did not change, so it is not staged.
+NEW_INFO = build_info(direct="new-direct", proxy="new-proxy", apple="old-apple")
+STAGED = {
+    "staging/direct.json": "new-direct",
+    "staging/proxy.json": "new-proxy",
+    "staging/build-info.json": NEW_INFO,
+    "staging/release-notes.md": "the notes",
+}
+COMPLETE = {**STAGED, "staging/apple.json": "old-apple"}  # what the carry-over step produces
+NEW_ASSETS = {
+    "direct.json": "new-direct",
+    "proxy.json": "new-proxy",
+    "apple.json": "old-apple",
+    "build-info.json": NEW_INFO,
+}
+USERS_GET_OLD = {"releases": {OLD_TAG: release(OLD)}, "latest": OLD_TAG}
+DRAFT_OK = {NEW_TAG: release(NEW_ASSETS, draft=True)}  # this run's draft, fully uploaded
 
 
 def load_workflow():
@@ -118,388 +225,771 @@ def step_script(job, name_prefix):
     return next(s["run"] for s in steps if s.get("name", "").startswith(name_prefix))
 
 
-def run_script(tmp_path, script, *, files=None, release=None, env=None):
-    """Run ``script`` in a scratch directory.
+class Sim:
+    """A scratch working directory plus a simulated repository for the stub ``gh``."""
 
-    ``files`` maps paths (relative to the scratch dir) to contents; ``release`` maps the
-    assets that already exist on the simulated release to their contents.
+    def __init__(self, tmp_path, *, files=None, releases=None, latest=None):
+        self.work, self.stubs, self.repo = tmp_path / "work", tmp_path / "bin", tmp_path / "repo"
+        self.log, self.counts = tmp_path / "calls.log", tmp_path / "counts"
+        self.github_env = tmp_path / "github_env"
+        for directory in (self.work, self.stubs, self.repo):
+            directory.mkdir()
+        for name, body in {
+            "gh": STUB_GH,
+            "sleep": '#!/bin/bash\necho "sleep $*" >> "$SIM_LOG"\n',
+            "python": '#!/bin/bash\necho "python $*" >> "$SIM_LOG"\n',
+        }.items():
+            (self.stubs / name).write_text(body)
+            (self.stubs / name).chmod((self.stubs / name).stat().st_mode | stat.S_IEXEC)
+        for relative, content in (files or {}).items():
+            target = self.work / relative
+            target.parent.mkdir(parents=True, exist_ok=True)
+            target.write_text(content)
+        for tag, rel in (releases or {}).items():
+            folder = self.repo / "releases" / tag
+            (folder / "assets").mkdir(parents=True)
+            for name, content in rel["assets"].items():
+                (folder / "assets" / name).write_text(content)
+            (folder / "created").write_text(rel["created"])
+            if rel["draft"]:
+                (folder / "draft").touch()
+        if latest:
+            (self.repo / "latest").write_text(latest)
+        self.log.write_text("")
+
+    def run(self, script, env=None):
+        (self.work / "run.sh").write_text(script)
+        full_env = {
+            **os.environ,
+            "PATH": f"{self.stubs}{os.pathsep}{os.environ['PATH']}",
+            "SIM_LOG": str(self.log),
+            "SIM_REPO": str(self.repo),
+            "SIM_COUNTS": str(self.counts),
+            "GITHUB_SHA": "0123abc",
+            "GITHUB_ENV": str(self.github_env),
+            **(env or {}),
+        }
+        return subprocess.run(
+            [BASH, "-eo", "pipefail", "run.sh"],
+            cwd=self.work,
+            env=full_env,
+            capture_output=True,
+            text=True,
+            timeout=60,
+            check=False,
+        )
+
+    def calls(self):
+        return self.log.read_text().splitlines()
+
+
+def run_script(tmp_path, script, *, files=None, releases=None, latest=None, env=None):
+    """Run ``script`` in a scratch directory against a simulated repository.
+
+    ``files`` maps paths (relative to the scratch dir) to contents; ``releases`` maps a tag
+    to ``release(...)`` and ``latest`` names the one that is marked "latest".
     """
-    work = tmp_path / "work"
-    stubs = tmp_path / "bin"
-    live = tmp_path / "release"
-    for directory in (work, stubs, live):
-        directory.mkdir()
-    for name, body in {
-        "gh": STUB_GH,
-        "sleep": '#!/bin/bash\necho "sleep $*" >> "$SIM_LOG"\n',
-        "python": '#!/bin/bash\necho "python $*" >> "$SIM_LOG"\n',
-    }.items():
-        (stubs / name).write_text(body)
-        (stubs / name).chmod((stubs / name).stat().st_mode | stat.S_IEXEC)
-    for relative, content in (files or {}).items():
-        target = work / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(content)
-    for name, content in (release or {}).items():
-        (live / name).write_text(content)
-    log = tmp_path / "calls.log"
-    log.write_text("")
-    (work / "run.sh").write_text(script)
-    full_env = {
-        **os.environ,
-        "PATH": f"{stubs}{os.pathsep}{os.environ['PATH']}",
-        "SIM_LOG": str(log),
-        "SIM_STATE": str(tmp_path / "state"),
-        "SIM_RELEASE": str(live),
-        "RELEASE_TAG": "latest",
-        **(env or {}),
-    }
-    done = subprocess.run(
-        [BASH, "-eo", "pipefail", "run.sh"],
-        cwd=work,
-        env=full_env,
-        capture_output=True,
-        text=True,
-        timeout=60,
-        check=False,
+    sim = Sim(tmp_path, files=files, releases=releases, latest=latest)
+    done = sim.run(script, env)
+    return done, sim.calls(), sim.repo
+
+
+def run_publish_job(tmp_path, *, files, releases, latest, env=None):
+    """Run the publish job's steps in order, the way Actions would.
+
+    A step that fails stops the job (unless it is ``continue-on-error``), steps guarded by
+    ``failure()`` run only after a failure, and what a step appends to ``$GITHUB_ENV`` is
+    visible to the steps after it. Returns ``(job_failed, outputs_by_step, sim)``.
+    """
+    sim = Sim(tmp_path, files=files, releases=releases, latest=latest)
+    job_env, failed, outputs = dict(env or {}), False, {}
+    for step in load_workflow()["jobs"]["publish"]["steps"]:
+        if "run" not in step:  # the artifact download: the files are already in place
+            continue
+        only_after_failure = "failure()" in step.get("if", "")
+        if only_after_failure and not (failed and job_env.get("RELEASE_TAG")):
+            continue
+        if not only_after_failure and failed:
+            continue
+        done = sim.run(step["run"], job_env)
+        outputs[step["name"]] = done
+        if sim.github_env.exists():
+            job_env.update(
+                line.split("=", 1)
+                for line in sim.github_env.read_text().splitlines()
+                if "=" in line
+            )
+        if done.returncode != 0 and not step.get("continue-on-error"):
+            failed = True
+    return failed, outputs, sim
+
+
+def repository(repo):
+    """What users could see: ``{"latest": tag, "releases": {tag: {"draft", "assets"}}}``."""
+    found = {}
+    for folder in sorted((repo / "releases").glob("*")):
+        assets = {p.name: p.read_text() for p in sorted((folder / "assets").iterdir())}
+        found[folder.name] = {"draft": (folder / "draft").exists(), "assets": assets}
+    latest = repo / "latest"
+    return {"latest": latest.read_text().strip() if latest.exists() else None, "releases": found}
+
+
+def duplicate_drafts(repo):
+    return (repo / "DUPLICATE_DRAFT").exists()
+
+
+def worked_on(calls, verb):
+    return [c for c in calls if c.startswith(f"gh release {verb}")]
+
+
+# ---- publish: complete the asset set -----------------------------------------------------
+
+
+def carry_over_script():
+    return step_script("publish", "Complete the asset set")
+
+
+def test_a_list_that_did_not_change_is_taken_from_the_latest_release(tmp_path):
+    # Every release must hold every list, or `releases/latest/download/<list>` would 404 the
+    # moment this release becomes the latest.
+    older = release({"apple.json": "ancient-apple"})
+    done, calls, _ = run_script(
+        tmp_path,
+        carry_over_script(),
+        files=STAGED,
+        releases={"2026-11-01-000000": older, **USERS_GET_OLD["releases"]},
+        latest=OLD_TAG,
     )
-    calls = log.read_text().splitlines()
-    return done, calls, live
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert (tmp_path / "work" / "staging" / "apple.json").read_text() == "old-apple"
+    # No tag argument: the release marked latest, not the newest or a particular tag.
+    assert worked_on(calls, "download") == [
+        "gh release download --pattern apple.json --dir staging"
+    ]
 
 
-def uploads(calls):
-    return [c for c in calls if c.startswith("gh release upload")]
+def test_nothing_is_downloaded_when_every_list_was_rebuilt(tmp_path):
+    files = {**STAGED, "staging/apple.json": "new-apple"}
+    info = build_info(direct="new-direct", proxy="new-proxy", apple="new-apple")
+    files["staging/build-info.json"] = info
+    done, calls, _ = run_script(tmp_path, carry_over_script(), files=files, **USERS_GET_OLD)
+    assert done.returncode == 0
+    assert not worked_on(calls, "download")
 
 
-def on_release(live):
-    return {p.name: p.read_text() for p in sorted(live.iterdir())}
+def test_a_list_that_is_nowhere_stops_the_job_and_says_how_to_recover(tmp_path):
+    lacking = {n: c for n, c in OLD.items() if n != "apple.json"}
+    done, _, repo = run_script(
+        tmp_path,
+        carry_over_script(),
+        files=STAGED,
+        releases={OLD_TAG: release(lacking)},
+        latest=OLD_TAG,
+    )
+    assert done.returncode == 1
+    assert "apple.json" in done.stdout and "force" in done.stdout
+    assert repository(repo)["releases"][OLD_TAG]["assets"] == lacking  # nothing was touched
 
 
-# A release that holds three lists and build-info; this run rebuilt direct and proxy only.
-OLD = {
-    "direct.json": "old-direct",
-    "proxy.json": "old-proxy",
-    "apple.json": "old-apple",
-    "build-info.json": "old-info",
-}
-STAGED = {
-    "staging/direct.json": "new-direct",
-    "staging/proxy.json": "new-proxy",
-    "staging/build-info.json": "new-info",
-}
+def test_with_no_release_at_all_an_incomplete_staging_stops_the_job(tmp_path):
+    done, _, _ = run_script(tmp_path, carry_over_script(), files=STAGED)
+    assert done.returncode == 1
+    assert "::error::" in done.stdout
 
 
-# ---- publish: upload ------------------------------------------------------------------
+# ---- publish: check the assets ----------------------------------------------------------
 
 
-def upload_script():
-    return step_script("publish", "Upload assets")
+def check_script():
+    return step_script("publish", "Check every asset")
 
 
-def test_changed_lists_and_build_info_replace_the_old_assets_and_nothing_else(tmp_path):
-    done, _, live = run_script(tmp_path, upload_script(), files=STAGED, release=OLD)
+def test_a_complete_set_whose_hashes_match_build_info_passes(tmp_path):
+    done, _, _ = run_script(tmp_path, check_script(), files=COMPLETE)
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert "ok  apple.json" in done.stdout
+
+
+def test_a_list_that_does_not_match_its_recorded_hash_is_never_published(tmp_path):
+    # A carried-over list that was damaged (or hand-edited) on the old release would
+    # otherwise be re-published as if it were verified.
+    done, _, _ = run_script(
+        tmp_path, check_script(), files={**COMPLETE, "staging/apple.json": "tampered"}
+    )
+    assert done.returncode == 1
+    assert "apple.json" in done.stdout and "force" in done.stdout
+
+
+def test_a_file_that_build_info_does_not_list_is_never_published(tmp_path):
+    done, _, _ = run_script(
+        tmp_path, check_script(), files={**COMPLETE, "staging/stray.json": "oops"}
+    )
+    assert done.returncode == 1
+    assert "stray.json" in done.stdout
+
+
+def test_a_listed_file_that_is_missing_stops_the_job(tmp_path):
+    files = {k: v for k, v in COMPLETE.items() if k != "staging/apple.json"}
+    done, _, _ = run_script(tmp_path, check_script(), files=files)
+    assert done.returncode == 1
+    assert "apple.json" in done.stdout
+
+
+# ---- publish: name, draft, verify, publish, confirm --------------------------------------
+
+
+def test_the_release_is_named_after_the_moment_it_was_built_so_names_sort_by_age(tmp_path):
+    done, _, _ = run_script(tmp_path, step_script("publish", "Name the release"))
     assert done.returncode == 0, done.stderr
-    assert on_release(live) == {
-        "direct.json": "new-direct",
-        "proxy.json": "new-proxy",
-        "apple.json": "old-apple",  # unchanged lists are never touched
-        "build-info.json": "new-info",
-    }
+    written = (tmp_path / "github_env").read_text().strip()
+    assert re.fullmatch(r"RELEASE_TAG=\d{4}-\d{2}-\d{2}-\d{6}", written), written
 
 
-def test_lists_are_uploaded_before_build_info_in_a_separate_command(tmp_path):
-    _, calls, _ = run_script(tmp_path, upload_script(), files=STAGED, release=OLD)
-    first, second = uploads(calls)
-    assert "staging/direct.json" in first and "staging/proxy.json" in first
-    assert "build-info" not in first  # gh uploads one command's files concurrently
-    assert second == "gh release upload latest staging/build-info.json --clobber"
+def draft_script():
+    return step_script("publish", "Create the draft")
 
 
-def test_every_upload_replaces_existing_assets(tmp_path):
-    _, calls, _ = run_script(
-        tmp_path, upload_script(), files=STAGED, release=OLD, env={"FAIL_UPLOADS": "1"}
+def test_the_new_release_is_created_as_a_draft_holding_every_asset(tmp_path):
+    done, calls, repo = run_script(
+        tmp_path, draft_script(), files=COMPLETE, **USERS_GET_OLD, env={"RELEASE_TAG": NEW_TAG}
     )
-    assert uploads(calls)
-    assert all(c.endswith("--clobber") for c in uploads(calls))
+    assert done.returncode == 0, done.stdout + done.stderr
+    state = repository(repo)
+    assert state["releases"][NEW_TAG] == {"draft": True, "assets": NEW_ASSETS}
+    # Users still get the old release: nothing public has changed yet.
+    assert state["latest"] == OLD_TAG
+    assert state["releases"][OLD_TAG] == {"draft": False, "assets": OLD}
+    (create,) = worked_on(calls, "create")
+    assert "--draft" in create and "--latest" not in create
+    assert "--notes-file staging/release-notes.md" in create
+    assert "--target 0123abc" in create
 
 
-def test_a_transient_failure_is_retried_with_backoff_and_the_build_succeeds(tmp_path):
-    done, calls, live = run_script(
-        tmp_path, upload_script(), files=STAGED, release=OLD, env={"FAIL_UPLOADS": "2"}
+def test_the_notes_file_is_never_published_as_an_asset(tmp_path):
+    _, _, repo = run_script(
+        tmp_path, draft_script(), files=COMPLETE, **USERS_GET_OLD, env={"RELEASE_TAG": NEW_TAG}
+    )
+    assert "release-notes.md" not in repository(repo)["releases"][NEW_TAG]["assets"]
+
+
+def test_a_transient_failure_is_retried_with_backoff_and_the_draft_ends_complete(tmp_path):
+    done, calls, repo = run_script(
+        tmp_path,
+        draft_script(),
+        files=COMPLETE,
+        **USERS_GET_OLD,
+        env={"RELEASE_TAG": NEW_TAG, "FAIL_CREATE": "2"},
     )
     assert done.returncode == 0
     assert any(c.startswith("sleep") for c in calls)
     assert "attempt 1 failed" in done.stdout and "attempt 2 failed" in done.stdout
-    assert on_release(live)["direct.json"] == "new-direct"
+    assert repository(repo)["releases"][NEW_TAG]["assets"] == NEW_ASSETS
 
 
-def test_the_old_build_info_survives_while_the_lists_keep_failing(tmp_path):
-    # If it were replaced first, a half-published release would claim the new hashes and
-    # the next run would see nothing to publish.
-    backup = {f"backup/{name}": body for name, body in OLD.items()}
-    done, _, live = run_script(
+def test_a_draft_left_half_uploaded_is_topped_up_not_created_again(tmp_path):
+    # `gh release create` makes the draft, then uploads: it can die in between. A second
+    # create would not be refused, it would make a second draft, so the retry must upload to
+    # the draft that is already there.
+    done, calls, repo = run_script(
         tmp_path,
-        upload_script(),
-        files={**STAGED, **backup},
-        release=OLD,
-        env={"FAIL_FILES": "direct.json"},
+        draft_script(),
+        files=COMPLETE,
+        **USERS_GET_OLD,
+        env={"RELEASE_TAG": NEW_TAG, "FAIL_CREATE_AFTER_DRAFT": "1"},
     )
-    assert done.returncode == 1
-    assert on_release(live)["build-info.json"] == "old-info"
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert len(worked_on(calls, "create")) == 1
+    (upload,) = worked_on(calls, "upload")
+    assert upload.startswith(f"gh release upload {NEW_TAG}")
+    assert repository(repo)["releases"][NEW_TAG] == {"draft": True, "assets": NEW_ASSETS}
 
 
-def test_a_failed_publish_restores_what_it_deleted_and_leaves_the_rest_alone(tmp_path):
-    backup = {f"backup/{name}": body for name, body in OLD.items()}
-    done, calls, live = run_script(
+def test_a_lookup_that_fails_never_leads_to_a_second_draft_with_the_same_tag(tmp_path):
+    # If the question "is there already a draft?" gets no answer, guessing "no" would make a
+    # second draft under the same tag, and then every lookup by tag is ambiguous: a later
+    # cleanup could delete the release users are served. The failed attempt must be retried.
+    done, calls, repo = run_script(
         tmp_path,
-        upload_script(),
-        files={**STAGED, **backup},
-        release=OLD,
-        env={"FAIL_UPLOADS": "3"},  # every upload attempt fails; the restore then succeeds
+        draft_script(),
+        files=COMPLETE,
+        **USERS_GET_OLD,
+        env={"RELEASE_TAG": NEW_TAG, "FAIL_CREATE_AFTER_DRAFT": "1", "FAIL_LOOKUP_ON": "2"},
     )
-    assert done.returncode == 1  # the run is red even though the release was put back
-    assert on_release(live) == OLD
-    assert "restoring the previous assets" in done.stdout
-    assert "RESTORE FAILED" not in done.stdout
-    # The unchanged list was never part of the publish, so the restore must not touch it:
-    # re-uploading it (delete, then upload) could only risk losing it.
-    assert not any("apple.json" in c for c in uploads(calls))
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert not duplicate_drafts(repo)
+    assert len(worked_on(calls, "create")) == 1
+    assert repository(repo)["releases"][NEW_TAG] == {"draft": True, "assets": NEW_ASSETS}
 
 
-def test_a_build_info_upload_that_fails_after_the_lists_landed_rolls_everything_back(tmp_path):
-    # Calls alternate lists / build-info, so calls 2, 4 and 6 are the three build-info
-    # attempts. Each one deleted the old build-info.json before failing. The lists are
-    # already new at that point; only a full rollback leaves a consistent release.
-    backup = {f"backup/{name}": body for name, body in OLD.items()}
-    done, _, live = run_script(
+def test_an_upload_that_fails_while_topping_up_the_draft_is_retried(tmp_path):
+    done, calls, repo = run_script(
         tmp_path,
-        upload_script(),
-        files={**STAGED, **backup},
-        release=OLD,
-        env={"FAIL_CALLS": "2 4 6"},
+        draft_script(),
+        files=COMPLETE,
+        **USERS_GET_OLD,
+        env={"RELEASE_TAG": NEW_TAG, "FAIL_CREATE_AFTER_DRAFT": "1", "FAIL_UPLOADS": "1"},
     )
-    assert done.returncode == 1
-    assert "RESTORE FAILED" not in done.stdout
-    assert on_release(live) == OLD
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert len(worked_on(calls, "create")) == 1 and len(worked_on(calls, "upload")) == 2
+    assert not duplicate_drafts(repo)
+    assert repository(repo)["releases"][NEW_TAG] == {"draft": True, "assets": NEW_ASSETS}
 
 
-def test_a_failed_restore_never_costs_an_unchanged_list_its_place_on_the_release(tmp_path):
-    # Regression: restoring every backed-up file meant an unrelated asset could be deleted
-    # by --clobber and then fail to come back, with build-info.json still claiming it was
-    # current, so no later run would ever republish it.
-    backup = {f"backup/{name}": body for name, body in OLD.items()}
-    done, _, live = run_script(
-        tmp_path,
-        upload_script(),
-        files={**STAGED, **backup},
-        release=OLD,
-        env={"FAIL_FILES": "direct.json apple.json"},  # direct can never be uploaded or restored
-    )
-    assert done.returncode == 1
-    assert "RESTORE FAILED" in done.stdout
-    assert on_release(live)["apple.json"] == "old-apple"
-    assert on_release(live)["build-info.json"] == "old-info"
-
-
-def test_build_info_is_restored_even_when_the_lists_cannot_be_restored(tmp_path):
-    # The old build-info.json is the release's self-healing state: its hashes no longer
-    # match the half-published lists, so the next build republishes them. It must come
-    # back whether or not the list restore works. Here the three build-info uploads fail
-    # (each deleting the old file) and restoring direct.json is impossible.
-    backup = {f"backup/{name}": body for name, body in OLD.items()}
-    done, _, live = run_script(
-        tmp_path,
-        upload_script(),
-        files={**STAGED, **backup},
-        release=OLD,
-        env={"FAIL_CALLS": "2 4 6", "FAIL_BACKUP_FILES": "direct.json"},
-    )
-    assert done.returncode == 1
-    assert "RESTORE FAILED" in done.stdout
-    assert on_release(live)["build-info.json"] == "old-info"
-    assert on_release(live)["apple.json"] == "old-apple"
-
-
-def test_restoring_after_a_new_sources_first_publish_skips_what_was_never_backed_up(tmp_path):
-    # A source's first publish: its asset is not in backup/. The restore must not try to
-    # upload a file that does not exist (gh would refuse the whole command).
-    staged = {**STAGED, "staging/google.json": "new-google"}
-    backup = {f"backup/{name}": body for name, body in OLD.items()}
-    done, _, live = run_script(
-        tmp_path,
-        upload_script(),
-        files={**staged, **backup},
-        release=OLD,
-        env={"FAIL_UPLOADS": "3"},
-    )
-    assert done.returncode == 1
-    assert "RESTORE FAILED" not in done.stdout
-    assert on_release(live) == OLD
-
-
-def test_restoring_a_build_info_only_publish_needs_no_list_upload(tmp_path):
-    done, _, live = run_script(
-        tmp_path,
-        upload_script(),
-        files={"staging/build-info.json": "new-info", "backup/build-info.json": "old-info"},
-        release={"build-info.json": "old-info"},
-        env={"FAIL_UPLOADS": "3"},
-    )
-    assert done.returncode == 1
-    assert "RESTORE FAILED" not in done.stdout
-    assert on_release(live) == {"build-info.json": "old-info"}
-
-
-def test_restoring_when_the_old_release_had_no_build_info_does_not_demand_one(tmp_path):
-    lists_only = {"direct.json": "old-direct", "proxy.json": "old-proxy"}
-    backup = {f"backup/{name}": body for name, body in lists_only.items()}
-    done, _, live = run_script(
-        tmp_path,
-        upload_script(),
-        files={**STAGED, **backup},
-        release=lists_only,
-        env={"FAIL_UPLOADS": "3"},
-    )
-    assert done.returncode == 1
-    assert "RESTORE FAILED" not in done.stdout
-    assert on_release(live) == lists_only
-
-
-@pytest.mark.parametrize("env", [{}, {"FAIL_UPLOADS": "3"}], ids=["success", "failure-and-restore"])
-def test_build_info_always_travels_in_a_command_of_its_own(tmp_path, env):
-    # gh uploads one command's files concurrently; sending build-info.json together with
-    # a list would let it land first, and a crash would then leave a record that claims
-    # lists the release does not have. This holds for the restore too.
-    backup = {f"backup/{name}": body for name, body in OLD.items()}
-    _, calls, _ = run_script(
-        tmp_path, upload_script(), files={**STAGED, **backup}, release=OLD, env=env
-    )
-    assert uploads(calls)
-    for call in uploads(calls):
-        if "build-info.json" in call:
-            assert len(call.split()) == 6, call  # gh release upload latest <one file> --clobber
-
-
-def test_a_failed_restore_is_retried_before_giving_up(tmp_path):
-    backup = {f"backup/{name}": body for name, body in OLD.items()}
-    _, calls, _ = run_script(
-        tmp_path,
-        upload_script(),
-        files={**STAGED, **backup},
-        release=OLD,
-        env={"FAIL_FILES": "direct.json"},
-    )
-    list_restores = [c for c in uploads(calls) if "backup/direct.json" in c]
-    assert len(list_restores) == 3  # the failing part is retried ...
-    info_restores = [c for c in uploads(calls) if "backup/build-info.json" in c]
-    assert len(info_restores) == 1  # ... a part that already landed is not sent again
-
-
-def test_without_a_backup_nothing_is_restored_but_the_run_still_fails(tmp_path):
+def test_two_drafts_with_one_tag_stop_the_job_instead_of_guessing(tmp_path):
+    # Should it ever happen, which one to top up, publish or delete is not knowable.
     done, calls, _ = run_script(
-        tmp_path, upload_script(), files=STAGED, env={"FAIL_UPLOADS": "100"}
+        tmp_path,
+        draft_script(),
+        files=COMPLETE,
+        releases={**USERS_GET_OLD["releases"], **DRAFT_OK},
+        latest=OLD_TAG,
+        env={"RELEASE_TAG": NEW_TAG, "LISTED_TWICE": NEW_TAG},
     )
     assert done.returncode == 1
-    assert not any("backup/" in c for c in uploads(calls))
+    assert "::error::" in done.stdout and NEW_TAG in done.stdout
+    assert not worked_on(calls, "create") and not worked_on(calls, "upload")
 
 
-def test_publishing_only_build_info_still_works(tmp_path):
-    done, calls, live = run_script(
+def test_when_the_draft_cannot_be_made_the_job_fails_and_users_keep_the_old_release(tmp_path):
+    done, _, repo = run_script(
         tmp_path,
-        upload_script(),
-        files={"staging/build-info.json": "new-info"},
-        release={"build-info.json": "old-info"},
+        draft_script(),
+        files=COMPLETE,
+        **USERS_GET_OLD,
+        env={"RELEASE_TAG": NEW_TAG, "FAIL_CREATE": "100"},
     )
-    assert done.returncode == 0, done.stderr
-    assert uploads(calls) == ["gh release upload latest staging/build-info.json --clobber"]
-    assert on_release(live) == {"build-info.json": "new-info"}
+    assert done.returncode == 1
+    assert "::error::" in done.stdout
+    state = repository(repo)
+    assert state["latest"] == OLD_TAG
+    assert state["releases"] == {OLD_TAG: {"draft": False, "assets": OLD}}
 
 
-# ---- publish: release creation, backup, notes, verification --------------------------
+def verify_script():
+    return step_script("publish", "Verify the draft")
 
 
-@pytest.mark.parametrize(
-    ("env", "creates"), [({"NO_RELEASE": "1"}, True), ({}, False)], ids=["fresh", "existing"]
-)
-def test_the_release_is_created_as_latest_only_when_it_does_not_exist(tmp_path, env, creates):
-    done, calls, _ = run_script(tmp_path, step_script("publish", "Create the release"), env=env)
-    assert done.returncode == 0, done.stderr
-    created = [c for c in calls if c.startswith("gh release create")]
-    assert bool(created) == creates
-    if creates:
-        assert created[0].split()[3] == "latest"  # gh release create <tag>
-        assert "--latest" in created[0]
-        assert "--notes-file staging/release-notes.md" in created[0]
-
-
-def test_every_current_asset_is_backed_up_before_anything_is_replaced(tmp_path):
-    done, calls, live = run_script(tmp_path, step_script("publish", "Back up"), release=OLD)
-    assert done.returncode == 0, done.stderr
-    backed_up = {p.name: p.read_text() for p in (tmp_path / "work" / "backup").iterdir()}
-    assert backed_up == OLD
-    assert on_release(live) == OLD
-    assert not uploads(calls)
-
-
-def test_a_release_without_assets_needs_no_backup(tmp_path):
-    done, calls, _ = run_script(tmp_path, step_script("publish", "Back up"))
-    assert done.returncode == 0
-    assert not any("download" in c for c in calls)
-
-
-def test_a_failed_backup_stops_the_job_with_the_release_untouched(tmp_path):
-    done, _, live = run_script(
-        tmp_path, step_script("publish", "Back up"), release=OLD, env={"FAIL_DOWNLOAD": "1"}
-    )
-    assert done.returncode != 0  # the job stops here, before the upload step can run
-    assert on_release(live) == OLD
-
-
-def test_failing_to_list_the_release_assets_also_stops_the_job(tmp_path):
+def test_verification_passes_when_the_draft_holds_the_staged_bytes(tmp_path):
     done, _, _ = run_script(
-        tmp_path, step_script("publish", "Back up"), release=OLD, env={"FAIL_VIEW": "1"}
-    )
-    assert done.returncode != 0
-
-
-def test_the_notes_step_publishes_the_release_as_the_latest_non_prerelease(tmp_path):
-    done, calls, _ = run_script(tmp_path, step_script("publish", "Update the release notes"))
-    assert done.returncode == 0
-    (edit,) = [c for c in calls if c.startswith("gh release edit")]
-    for flag in ("--latest", "--draft=false", "--prerelease=false"):
-        assert flag in edit
-    assert "--notes-file staging/release-notes.md" in edit
-
-
-def test_verification_passes_when_the_release_holds_the_staged_bytes(tmp_path):
-    done, _, _ = run_script(
-        tmp_path,
-        step_script("publish", "Verify"),
-        files=STAGED,
-        release={
-            "direct.json": "new-direct",
-            "proxy.json": "new-proxy",
-            "build-info.json": "new-info",
-        },
+        tmp_path, verify_script(), files=COMPLETE, releases=DRAFT_OK, env={"RELEASE_TAG": NEW_TAG}
     )
     assert done.returncode == 0, done.stdout + done.stderr
     assert "ok  direct.json" in done.stdout
 
 
+def test_verification_needs_exactly_one_draft_with_the_tag(tmp_path):
+    # `create` can succeed on GitHub while its answer is lost, and the next lookup may not
+    # show the draft yet: that attempt makes a second one. Publish, verify and cleanup all
+    # find the release by tag, so with two they could each act on a different release.
+    done, _, _ = run_script(
+        tmp_path,
+        verify_script(),
+        files=COMPLETE,
+        releases=DRAFT_OK,
+        env={"RELEASE_TAG": NEW_TAG, "LISTED_TWICE": NEW_TAG},
+    )
+    assert done.returncode == 1
+    assert "::error::" in done.stdout and NEW_TAG in done.stdout
+
+
 @pytest.mark.parametrize(
-    "release",
+    "assets",
     [
-        {"direct.json": "new-direct", "build-info.json": "new-info"},  # proxy.json missing
-        {"direct.json": "new-direct", "proxy.json": "cut", "build-info.json": "new-info"},
+        {k: v for k, v in NEW_ASSETS.items() if k != "proxy.json"},  # proxy.json missing
+        {**NEW_ASSETS, "proxy.json": "cut"},  # wrong size
     ],
     ids=["missing-asset", "wrong-size"],
 )
-def test_verification_fails_when_an_asset_is_missing_or_the_wrong_size(tmp_path, release):
+def test_verification_fails_when_an_asset_is_missing_or_the_wrong_size(tmp_path, assets):
     done, _, _ = run_script(
-        tmp_path, step_script("publish", "Verify"), files=STAGED, release=release
+        tmp_path,
+        verify_script(),
+        files=COMPLETE,
+        releases={NEW_TAG: release(assets, draft=True)},
+        env={"RELEASE_TAG": NEW_TAG},
     )
     assert done.returncode == 1
     assert "::error::" in done.stdout
+
+
+def publish_script():
+    return step_script("publish", "Publish the release")
+
+
+def test_publishing_makes_the_draft_the_latest_release_in_one_step(tmp_path):
+    done, calls, repo = run_script(
+        tmp_path,
+        publish_script(),
+        releases={OLD_TAG: release(OLD), **DRAFT_OK},
+        latest=OLD_TAG,
+        env={"RELEASE_TAG": NEW_TAG},
+    )
+    assert done.returncode == 0, done.stderr
+    state = repository(repo)
+    assert state["latest"] == NEW_TAG
+    assert state["releases"][NEW_TAG]["draft"] is False
+    (edit,) = worked_on(calls, "edit")
+    for flag in ("--draft=false", "--prerelease=false", "--latest"):
+        assert flag in edit  # one call: there is no moment with a public non-latest release
+    assert state["releases"][OLD_TAG] == {"draft": False, "assets": OLD}  # kept for rollback
+
+
+def test_a_failed_publish_leaves_the_old_release_as_the_latest(tmp_path):
+    done, _, repo = run_script(
+        tmp_path,
+        publish_script(),
+        releases={OLD_TAG: release(OLD), **DRAFT_OK},
+        latest=OLD_TAG,
+        env={"RELEASE_TAG": NEW_TAG, "FAIL_EDIT": "1"},
+    )
+    assert done.returncode != 0
+    assert repository(repo)["latest"] == OLD_TAG
+    assert repository(repo)["releases"][NEW_TAG]["draft"] is True
+
+
+def confirm_script():
+    return step_script("publish", "Confirm")
+
+
+PUBLISHED_TWICE = {OLD_TAG: release(OLD), NEW_TAG: release(NEW_ASSETS)}
+
+
+def test_the_run_passes_when_the_new_release_is_the_one_users_get(tmp_path):
+    done, _, _ = run_script(
+        tmp_path,
+        confirm_script(),
+        releases=PUBLISHED_TWICE,
+        latest=NEW_TAG,
+        env={"RELEASE_TAG": NEW_TAG},
+    )
+    assert done.returncode == 0, done.stdout + done.stderr
+
+
+def test_the_run_fails_when_users_would_still_get_another_release(tmp_path):
+    done, _, _ = run_script(
+        tmp_path,
+        confirm_script(),
+        releases=PUBLISHED_TWICE,
+        latest=OLD_TAG,
+        env={"RELEASE_TAG": NEW_TAG},
+    )
+    assert done.returncode == 1
+    assert "::error::" in done.stdout
+
+
+# ---- publish: prune ---------------------------------------------------------------------
+
+
+def prune_script():
+    return step_script("publish", "Prune")
+
+
+def stamped(day):
+    return f"2026-11-{day:02d}-120000"
+
+
+def history(days, **extra):
+    return {stamped(d): release({"proxy.json": f"p{d}"}) for d in days} | extra
+
+
+def test_only_the_newest_releases_are_kept_and_the_old_ones_go_with_their_tags(tmp_path):
+    done, calls, repo = run_script(
+        tmp_path,
+        prune_script(),
+        releases=history(range(1, 8)),
+        latest=stamped(7),
+        env={"RELEASE_TAG": stamped(7), "KEEP_RELEASES": "3"},
+    )
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert set(repository(repo)["releases"]) == {stamped(5), stamped(6), stamped(7)}
+    assert all("--cleanup-tag" in c for c in worked_on(calls, "delete"))
+
+
+def test_releases_this_workflow_did_not_make_are_never_pruned(tmp_path):
+    # The legacy rolling release is tagged `latest`; hand-made releases have their own tags.
+    precious = {"latest": release(OLD), "v1.0": release({"x.json": "x"}), "2026-11": release({})}
+    done, _, repo = run_script(
+        tmp_path,
+        prune_script(),
+        releases=history(range(1, 6), **precious),
+        latest=stamped(5),
+        env={"RELEASE_TAG": stamped(5), "KEEP_RELEASES": "2"},
+    )
+    assert done.returncode == 0
+    assert set(repository(repo)["releases"]) == {stamped(4), stamped(5), *precious}
+
+
+def test_the_latest_release_survives_even_if_it_looks_old_enough_to_prune(tmp_path):
+    done, _, repo = run_script(
+        tmp_path,
+        prune_script(),
+        releases=history(range(1, 6)),
+        latest=stamped(1),  # e.g. somebody re-marked an old release as the latest
+        env={"RELEASE_TAG": stamped(5), "KEEP_RELEASES": "2"},
+    )
+    assert done.returncode == 0
+    assert stamped(1) in repository(repo)["releases"]
+    assert stamped(5) in repository(repo)["releases"]
+
+
+def test_nothing_is_pruned_while_there_are_fewer_releases_than_the_limit(tmp_path):
+    done, calls, _ = run_script(
+        tmp_path,
+        prune_script(),
+        releases=history(range(1, 4)),
+        latest=stamped(3),
+        env={"RELEASE_TAG": stamped(3), "KEEP_RELEASES": "28"},
+    )
+    assert done.returncode == 0
+    assert not worked_on(calls, "delete")
+
+
+def test_one_release_that_cannot_be_deleted_does_not_stop_the_rest(tmp_path):
+    done, _, repo = run_script(
+        tmp_path,
+        prune_script(),
+        releases=history(range(1, 7)),
+        latest=stamped(6),
+        env={"RELEASE_TAG": stamped(6), "KEEP_RELEASES": "2", "FAIL_DELETE": stamped(2)},
+    )
+    assert done.returncode == 0
+    assert "::warning::" in done.stdout and stamped(2) in done.stdout
+    assert set(repository(repo)["releases"]) == {stamped(2), stamped(5), stamped(6)}
+
+
+def test_prune_never_touches_a_draft_whoever_made_it(tmp_path):
+    # A draft is invisible to users, so leaving one costs nothing. Deleting one could throw
+    # away a build a maintainer pulled back to a draft on purpose, and deleting by tag is
+    # ambiguous whenever a published release shares it. The cleanup step removes this run's
+    # own draft; anything else is left for a person to look at.
+    releases = history(
+        range(1, 6),
+        **{
+            "2026-11-04-060000": release({"proxy.json": "p"}, draft=True, created=LONG_AGO),
+            "my-notes": release({}, draft=True),
+        },
+    )
+    done, calls, repo = run_script(
+        tmp_path,
+        prune_script(),
+        releases=releases,
+        latest=stamped(5),
+        env={"RELEASE_TAG": stamped(5), "KEEP_RELEASES": "1"},
+    )
+    assert done.returncode == 0, done.stdout + done.stderr
+    # Only one release is kept, so every older one is deleted: the old drafts are older
+    # than the kept release too, and survive anyway.
+    assert set(repository(repo)["releases"]) == {stamped(5), "2026-11-04-060000", "my-notes"}
+    assert {c.split()[3] for c in worked_on(calls, "delete")} == {stamped(d) for d in range(1, 5)}
+
+
+@pytest.mark.parametrize("keep", ["", "0", "00", "08", "007", "abc", "-1", "2.5", " 5"])
+def test_a_missing_or_nonsensical_retention_limit_prunes_nothing(tmp_path, keep):
+    # `tail -n +1` keeps everything it is given, so a limit of 0 (or an unset variable)
+    # would otherwise delete every release except the latest.
+    done, calls, repo = run_script(
+        tmp_path,
+        prune_script(),
+        releases=history(range(1, 6)),
+        latest=stamped(5),
+        env={"RELEASE_TAG": stamped(5), "KEEP_RELEASES": keep},
+    )
+    assert done.returncode != 0
+    assert "KEEP_RELEASES" in done.stdout
+    assert not worked_on(calls, "delete")
+    assert len(repository(repo)["releases"]) == 5
+
+
+# ---- publish: clean up after a failure ---------------------------------------------------
+
+
+def cleanup_script():
+    return step_script("publish", "Delete the draft")
+
+
+def test_a_draft_left_behind_by_a_failed_run_is_deleted(tmp_path):
+    done, _, repo = run_script(
+        tmp_path,
+        cleanup_script(),
+        releases={OLD_TAG: release(OLD), **DRAFT_OK},
+        latest=OLD_TAG,
+        env={"RELEASE_TAG": NEW_TAG},
+    )
+    assert done.returncode == 0, done.stdout + done.stderr
+    assert set(repository(repo)["releases"]) == {OLD_TAG}
+
+
+def test_a_release_that_is_already_public_is_never_deleted_by_the_cleanup(tmp_path):
+    # The job can fail after the flip (the prune or the confirmation). Deleting then would
+    # remove the release users are being served.
+    published = {OLD_TAG: release(OLD), NEW_TAG: release(NEW_ASSETS)}
+    done, calls, repo = run_script(
+        tmp_path, cleanup_script(), releases=published, latest=NEW_TAG, env={"RELEASE_TAG": NEW_TAG}
+    )
+    assert done.returncode == 0
+    assert not worked_on(calls, "delete")
+    assert set(repository(repo)["releases"]) == {OLD_TAG, NEW_TAG}
+
+
+def test_cleanup_deletes_nothing_when_it_cannot_tell_whether_the_release_is_a_draft(tmp_path):
+    # Unknown is not "draft": a draft left behind is swept by the next successful run, a
+    # published release that is deleted is gone.
+    done, calls, repo = run_script(
+        tmp_path,
+        cleanup_script(),
+        releases={OLD_TAG: release(OLD), NEW_TAG: release(NEW_ASSETS)},
+        latest=NEW_TAG,
+        env={"RELEASE_TAG": NEW_TAG, "FAIL_LOOKUP_ON": "1"},
+    )
+    assert done.returncode == 0
+    assert not worked_on(calls, "delete")
+    assert set(repository(repo)["releases"]) == {OLD_TAG, NEW_TAG}
+
+
+def test_cleanup_has_nothing_to_do_when_the_draft_was_never_made(tmp_path):
+    done, calls, _ = run_script(
+        tmp_path, cleanup_script(), **USERS_GET_OLD, env={"RELEASE_TAG": NEW_TAG}
+    )
+    assert done.returncode == 0
+    assert not worked_on(calls, "delete")
+
+
+# ---- publish: the whole job, step by step -------------------------------------------------
+
+
+def job_defaults():
+    """The publish job's own env values, minus the ones that need GitHub to evaluate."""
+    env = load_workflow()["jobs"]["publish"].get("env", {})
+    return {k: str(v) for k, v in env.items() if "${{" not in str(v)}
+
+
+def run_job(tmp_path, *, files, releases, latest, env=None):
+    return run_publish_job(
+        tmp_path,
+        files=files,
+        releases=releases,
+        latest=latest,
+        env={**job_defaults(), **(env or {})},
+    )
+
+
+@pytest.mark.parametrize("today", [OLD_TAG, "latest"], ids=["timestamp-release", "legacy-rolling"])
+def test_a_normal_run_ends_with_one_new_complete_release_as_the_latest(tmp_path, today):
+    # `latest` is the old rolling release: the first run after the switch reads from it and
+    # leaves it alone.
+    failed, _, sim = run_job(tmp_path, files=STAGED, releases={today: release(OLD)}, latest=today)
+    assert not failed
+    state = repository(sim.repo)
+    (new_tag,) = set(state["releases"]) - {today}
+    assert state["latest"] == new_tag
+    assert re.fullmatch(r"\d{4}-\d\d-\d\d-\d{6}", new_tag)
+    assert state["releases"][new_tag] == {"draft": False, "assets": NEW_ASSETS}
+    assert state["releases"][today] == {"draft": False, "assets": OLD}  # untouched
+    assert not duplicate_drafts(sim.repo)
+
+
+def test_the_very_first_release_needs_nothing_to_carry_over(tmp_path):
+    failed, _, sim = run_job(tmp_path, files=COMPLETE, releases={}, latest=None)
+    assert not failed
+    state = repository(sim.repo)
+    assert state["releases"][state["latest"]]["assets"] == NEW_ASSETS
+    assert not worked_on(sim.calls(), "download")
+
+
+def test_a_failure_before_publishing_leaves_users_on_the_old_release_and_no_draft_behind(tmp_path):
+    failed, steps, sim = run_job(tmp_path, files=STAGED, **USERS_GET_OLD, env={"FAIL_EDIT": "1"})
+    assert failed
+    state = repository(sim.repo)
+    assert state["latest"] == OLD_TAG
+    assert state["releases"] == {OLD_TAG: {"draft": False, "assets": OLD}}
+    assert "Delete the draft if the run did not finish" in steps
+
+
+def test_a_failure_after_publishing_never_deletes_the_release_users_are_served(tmp_path):
+    # Here the flip publishes but GitHub does not move "latest", so the confirmation fails
+    # and the job is red. The cleanup then runs, and must find a published release and leave it.
+    failed, steps, sim = run_job(
+        tmp_path, files=STAGED, **USERS_GET_OLD, env={"EDIT_WITHOUT_LATEST": "1"}
+    )
+    assert failed
+    assert "Confirm the new release is the latest" in steps
+    assert steps["Confirm the new release is the latest"].returncode == 1
+    assert "Delete the draft if the run did not finish" in steps
+    assert not worked_on(sim.calls(), "delete")
+    state = repository(sim.repo)
+    (new_tag,) = set(state["releases"]) - {OLD_TAG}
+    assert state["releases"][new_tag] == {"draft": False, "assets": NEW_ASSETS}
+
+
+def test_a_damaged_carried_over_list_stops_the_job_before_anything_is_created(tmp_path):
+    damaged = {**OLD, "apple.json": "damaged-on-the-old-release"}
+    failed, steps, sim = run_job(
+        tmp_path, files=STAGED, releases={OLD_TAG: release(damaged)}, latest=OLD_TAG
+    )
+    assert failed
+    assert "apple.json" in steps["Check every asset against build-info.json"].stdout
+    assert not worked_on(sim.calls(), "create")
+    assert repository(sim.repo) == {
+        "latest": OLD_TAG,
+        "releases": {OLD_TAG: {"draft": False, "assets": damaged}},
+    }
+
+
+def test_a_disabled_source_is_left_out_of_the_new_release_and_stays_on_the_old_ones(tmp_path):
+    # build-info.json no longer lists a disabled source, and build-info.json is the one list
+    # of what a release holds. Its download link therefore stops working on the latest
+    # release; older releases keep the file until they are pruned. The README says so.
+    without_apple = {
+        "staging/direct.json": "new-direct",
+        "staging/proxy.json": "new-proxy",
+        "staging/build-info.json": build_info(direct="new-direct", proxy="new-proxy"),
+        "staging/release-notes.md": "the notes",
+    }
+    failed, _, sim = run_job(tmp_path, files=without_apple, **USERS_GET_OLD)
+    assert not failed
+    state = repository(sim.repo)
+    assert set(state["releases"][state["latest"]]["assets"]) == {
+        "direct.json",
+        "proxy.json",
+        "build-info.json",
+    }
+    assert "apple.json" in state["releases"][OLD_TAG]["assets"]
+    assert not any("apple.json" in c for c in worked_on(sim.calls(), "download"))
+
+
+# ---- build: previous build-info ----------------------------------------------------------
+
+
+def previous_script():
+    return step_script("build", "Download the previous")
+
+
+def test_the_previous_build_info_comes_from_the_latest_release_not_from_a_tag_named_latest(
+    tmp_path,
+):
+    # After the move to one release per build, the old rolling release (tag `latest`) is
+    # frozen. Reading build-info.json from it would make every run compare against stale
+    # hashes and merge single-source builds into a record that nothing updates.
+    releases = {
+        "latest": release({"build-info.json": "frozen-legacy-info"}),
+        OLD_TAG: release({"build-info.json": "current-info"}),
+    }
+    done, calls, _ = run_script(tmp_path, previous_script(), releases=releases, latest=OLD_TAG)
+    assert done.returncode == 0, done.stderr
+    assert (tmp_path / "work" / "previous" / "build-info.json").read_text() == "current-info"
+    assert worked_on(calls, "download") == [
+        "gh release download --pattern build-info.json --dir previous"
+    ]
+
+
+def test_a_first_run_without_any_release_carries_on_without_a_previous_build_info(tmp_path):
+    done, _, _ = run_script(tmp_path, previous_script())
+    assert done.returncode == 0
+    assert "No previous release" in done.stdout
+    assert not (tmp_path / "work" / "previous" / "build-info.json").exists()
+
+
+# ---- build: staging and single-source runs -----------------------------------------------
 
 
 @pytest.mark.parametrize(
@@ -514,9 +1004,6 @@ def test_staging_needs_assets_which_is_why_it_is_gated_on_a_publish(tmp_path, se
     prologue = f"mkdir dist reports\ntouch reports/release-notes.md\n{setup}"
     done, _, _ = run_script(tmp_path, prologue + script)
     assert (done.returncode == 0) is ok
-
-
-# ---- build: single-source runs -----------------------------------------------------------
 
 
 def build_script():
