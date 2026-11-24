@@ -1,0 +1,7 @@
+# tiny fixture in the Loyalsoldier domain-set format
+example.com
+.example.com
+.foo.org
+
+gone.example
+.localhost

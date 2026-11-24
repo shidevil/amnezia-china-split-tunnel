@@ -1,0 +1,243 @@
+name: Build Amnezia lists
+
+on:
+  schedule:
+    # Every 6 hours (UTC). GitHub may delay scheduled runs under load.
+    - cron: "0 */6 * * *"
+  workflow_dispatch:
+    inputs:
+      source:
+        description: "Source(s) to build: 'all', or comma-separated names from config.yaml (e.g. cn-cidr,proxy)"
+        type: string
+        default: all
+        required: false
+      force:
+        description: "Force rebuild: publish even if nothing changed"
+        type: boolean
+        default: false
+
+# One build at a time; never cancel a run that is half-way through publishing.
+concurrency:
+  group: build-lists
+  cancel-in-progress: false
+
+# Deny everything by default; every job below asks for exactly what it needs.
+permissions: {}
+
+# An explicit shell makes GitHub run steps as `bash -eo pipefail`; the default is plain
+# `bash -e`. tests/test_workflow_scripts.py runs the steps with the stricter form.
+defaults:
+  run:
+    shell: bash
+
+env:
+  RELEASE_TAG: latest
+
+jobs:
+  build:
+    name: Resolve and validate
+    runs-on: ubuntu-latest
+    timeout-minutes: 240
+    permissions:
+      contents: read # checkout, and reading the previous release's build-info.json
+    outputs:
+      publish: ${{ steps.build.outputs.publish }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+
+      - uses: actions/setup-python@6d4fd22b20465ccc0f7354476588e8df7c9ca0e0 # v7.1.0
+        with:
+          python-version: "3.12"
+          cache: pip
+          cache-dependency-path: requirements.txt
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Download the previous build-info.json (to detect unchanged lists)
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          mkdir -p previous
+          gh release download "$RELEASE_TAG" --pattern build-info.json --dir previous \
+            || echo "No previous release (first run?): every list will be published."
+
+      - name: Build
+        id: build
+        env:
+          GITHUB_TOKEN: ${{ github.token }} # only used for the GitHub API rate limit
+          SOURCE: ${{ inputs.source }}
+          FORCE: ${{ inputs.force }}
+        run: |
+          args=()
+          if [ -n "${SOURCE:-}" ] && [ "$SOURCE" != "all" ]; then
+            # A single-source build merges into the last release's build-info.json, so that
+            # file must exist and be usable: the generator refuses to guess (exit 2).
+            args+=(--source "$SOURCE" --require-previous)
+          fi
+          if [ "${FORCE:-false}" = "true" ]; then args+=(--force); fi
+          if [ -f previous/build-info.json ]; then
+            args+=(--previous-build-info previous/build-info.json)
+          fi
+          python -m src.main "${args[@]}"
+
+      # Stage everything the publish job needs in ONE directory, so the artifact layout
+      # does not depend on how upload-artifact derives a root from several paths.
+      - name: Stage release assets
+        if: steps.build.outputs.publish == 'true'
+        run: |
+          mkdir release
+          cp dist/*.json release/
+          cp reports/release-notes.md release/
+
+      - name: Upload release assets for the publish job
+        if: steps.build.outputs.publish == 'true'
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: release-assets
+          path: release/
+          if-no-files-found: error
+          retention-days: 7
+
+      - name: Upload failure reports
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: build-reports
+          path: reports/
+          if-no-files-found: ignore
+          retention-days: 14
+
+  publish:
+    name: Publish to the rolling release
+    needs: build
+    if: needs.build.outputs.publish == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write # create/update the release and its assets
+    env:
+      GH_TOKEN: ${{ github.token }}
+      GH_REPO: ${{ github.repository }}
+    steps:
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: release-assets
+          path: staging
+
+      - name: Create the release if it does not exist
+        run: |
+          if ! gh release view "$RELEASE_TAG" >/dev/null 2>&1; then
+            gh release create "$RELEASE_TAG" \
+              --title "Latest lists" \
+              --notes-file staging/release-notes.md \
+              --target "$GITHUB_SHA" \
+              --latest
+          fi
+
+      # `gh release upload --clobber` deletes an asset before uploading its replacement,
+      # so keep a copy to restore from. If the release has assets the backup must
+      # succeed: failing here, before anything is touched, is always safe.
+      - name: Back up the current assets
+        run: |
+          mkdir backup
+          count=$(gh release view "$RELEASE_TAG" --json assets --jq '.assets | length')
+          if [ "$count" -gt 0 ]; then
+            gh release download "$RELEASE_TAG" --dir backup
+          fi
+
+      - name: Upload assets (replacing existing ones)
+        run: |
+          # `gh` uploads the files of one command concurrently, so build-info.json is sent
+          # in a second command, after every list. If a run dies half-way, the release
+          # still carries the OLD build-info.json, whose hashes no longer match the new
+          # lists, so the next run republishes them instead of trusting a stale record.
+          lists=()
+          for file in staging/*.json; do
+            [ "$(basename "$file")" = build-info.json ] || lists+=("$file")
+          done
+          upload() {
+            for attempt in 1 2 3; do
+              if { [ ${#lists[@]} -eq 0 ] || gh release upload "$RELEASE_TAG" "${lists[@]}" --clobber; } \
+                && gh release upload "$RELEASE_TAG" staging/build-info.json --clobber; then
+                return 0
+              fi
+              echo "::warning::upload attempt $attempt failed"
+              sleep $((attempt * 15))
+            done
+            return 1
+          }
+          restore() {
+            # Put back only what this run may have deleted: the files it staged. Every
+            # other asset was never touched, and re-uploading it (delete, then upload)
+            # could only risk losing it. build-info.json goes in its own command, and is
+            # attempted even if the lists cannot be restored: the old file's hashes no
+            # longer match the half-published lists, so the next build republishes them.
+            restorable=()
+            for file in "${lists[@]}"; do
+              if [ -f "backup/$(basename "$file")" ]; then
+                restorable+=("backup/$(basename "$file")")
+              fi
+            done
+            lists_done=false
+            info_done=false
+            [ ${#restorable[@]} -eq 0 ] && lists_done=true
+            [ -f backup/build-info.json ] || info_done=true
+            for attempt in 1 2 3; do
+              if ! $lists_done && gh release upload "$RELEASE_TAG" "${restorable[@]}" --clobber; then
+                lists_done=true
+              fi
+              if ! $info_done && gh release upload "$RELEASE_TAG" backup/build-info.json --clobber; then
+                info_done=true
+              fi
+              if $lists_done && $info_done; then return 0; fi
+              sleep $((attempt * 15))
+            done
+            return 1
+          }
+          if ! upload; then
+            echo "::error::Uploading failed after 3 attempts; restoring the previous assets."
+            if compgen -G "backup/*" >/dev/null; then
+              restore || echo "::error::RESTORE FAILED: the release may lack assets until the next successful build."
+            fi
+            exit 1
+          fi
+
+      - name: Update the release notes and mark it as the latest release
+        run: |
+          gh release edit "$RELEASE_TAG" \
+            --title "Latest lists" \
+            --notes-file staging/release-notes.md \
+            --draft=false --prerelease=false --latest
+
+      - name: Verify the published assets
+        run: |
+          for file in staging/*.json; do
+            name=$(basename "$file")
+            expected=$(($(wc -c < "$file")))
+            actual=$(gh release view "$RELEASE_TAG" --json assets \
+              --jq ".assets[] | select(.name == \"$name\") | .size")
+            if [ "$actual" != "$expected" ]; then
+              echo "::error::$name on the release is ${actual:-missing} bytes, expected $expected"
+              exit 1
+            fi
+            echo "ok  $name ($expected bytes)"
+          done
+
+  keepalive:
+    # GitHub disables scheduled workflows in public repositories after 60 days without
+    # repository activity. Re-enabling the workflow on every scheduled run is a
+    # best-effort way to keep the schedule alive. A failure here must never fail a build.
+    name: Keep the schedule enabled
+    needs: build
+    if: always() && github.event_name == 'schedule'
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    continue-on-error: true
+    permissions:
+      actions: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh api --method PUT "/repos/$GITHUB_REPOSITORY/actions/workflows/build.yml/enable"

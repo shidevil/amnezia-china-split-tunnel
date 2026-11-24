@@ -1,0 +1,20 @@
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["."]
+addopts = "-ra"
+markers = [
+    "live: integration tests that use real DNS (enabled with RUN_LIVE_DNS=1)",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+
+[tool.ruff.lint]
+select = ["E", "F", "W", "I", "B", "UP", "S", "ASYNC"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests use dummy secrets/addresses (0.0.0.0 as a sinkhole answer), seeded `random` to
+# shuffle input, mirror dnspython's `timeout` parameter on fake query functions, and run
+# the workflow's own shell steps with bash (S603).
+"tests/*" = ["S101", "S104", "S106", "S311", "S603", "ASYNC109"]

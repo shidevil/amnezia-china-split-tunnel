@@ -1,0 +1,9 @@
+# QuantumultX style list, with IPv6 lines and entries that must be refused
+ip-cidr, 1.0.1.0/24
+ip-cidr, 1.0.3.0/24
+ip-cidr, 1.0.8.0/21
+ip-cidr, 36.64.0.0/10
+ip-cidr, 2400:3200::/32
+ip-cidr6, 2001:250::/30
+ip-cidr, 10.0.0.0/8
+ip-cidr, 0.0.0.0/0

@@ -1,0 +1,93 @@
+# Amnezia split-tunnel generator configuration.
+#
+# Everything the build does is driven from this file. Adding a source or
+# changing DNS behaviour never requires touching the Python code.
+
+# ---------------------------------------------------------------------------
+# Lists. The key is the source name and becomes the output file name
+# (<name>.json). Names may contain a-z, 0-9, "_" and "-" only.
+#
+# The Amnezia app routes IP addresses and subnets only and never refreshes them, so
+# there are exactly two kinds of list, and you import ONE of them per route mode:
+#
+#   kind: cidr     IPv4 networks copied from the upstream lists and merged. Nothing
+#                  is resolved, so the list cannot go stale inside the app.
+#                  For "all sites except listed" (China stays outside the VPN).
+#   kind: domains  (default) domain rules resolved to their current IPv4 addresses.
+#                  A DNS snapshot that needs re-importing to stay fresh.
+#                  For "only listed sites through VPN".
+#
+# Options:
+#   enabled            true/false (default true)
+#   url                one URL, or a list of URLs merged into this one list
+#   kind               cidr | domains (default domains)
+#
+#   domains only:
+#   max_error_rate     override validation.max_error_rate for this source
+#   min_resolved_rate  override validation.min_resolved_rate for this source
+#   allow_empty        allow an empty output ([]) for this source
+#
+#   cidr only:
+#   min_entries        every URL, and the merged list, must hold at least this many
+#                      valid IPv4 CIDRs (default 1). Stops a truncated or broken feed
+#                      from silently dropping out of the union.
+#   max_addresses      refuse a list covering more addresses than this. In a list that
+#                      bypasses the VPN, an over-inclusive feed is the dangerous failure.
+# ---------------------------------------------------------------------------
+sources:
+  # Fixed: mainland China IPv4 networks. The union of both upstream lists (an address is
+  # kept if either list has it): 6,793 CIDRs / 359M addresses when this was written, of a
+  # possible 3.7 billion. Use the raw.githubusercontent.com URL of a file, not its
+  # github.com/.../blob/ page, so the build can pin it to a commit.
+  cn-cidr:
+    kind: cidr
+    url:
+      - https://raw.githubusercontent.com/mayaxcn/china-ip-list/master/chnroute.txt
+      - https://raw.githubusercontent.com/Xiaobei09/Rule-Provider/main/ruleset/geoip/QuantumultX/CN.txt
+    # A floor against an empty or badly truncated feed, not a precise check: the network count
+    # of one upstream fell from 8,798 to 5,697 in a week when it re-aggregated, while its
+    # coverage grew. Today the upstreams hold 5,697 and 7,054 IPv4 networks.
+    min_entries: 4000
+    # The union is ~359M addresses and grew 1.7% in the 30 days measured. 400M leaves room for
+    # about 11%, not for a feed that starts claiming whole /8 blocks. A build that hits the
+    # ceiling fails and keeps the previous release; raise it after checking the upstream diff.
+    max_addresses: 400000000
+
+  # Updated: domains that need the VPN, resolved to IPv4. Re-import it from time to time.
+  proxy:
+    url:
+      - https://raw.githubusercontent.com/Loyalsoldier/surge-rules/release/gfw.txt
+      - https://raw.githubusercontent.com/Loyalsoldier/surge-rules/release/proxy.txt
+
+# ---------------------------------------------------------------------------
+# DNS resolution (IPv4 A records only; domain lists only)
+# ---------------------------------------------------------------------------
+dns:
+  resolvers:
+    - 1.1.1.1
+    - 8.8.8.8
+    - 9.9.9.9
+  timeout: 5 # seconds per attempt
+  retries: 2 # extra attempts after the first, each on the next resolver
+  concurrency: 100 # lookups in flight at once
+  max_qps: 300 # global query rate cap (0 = unlimited)
+
+# ---------------------------------------------------------------------------
+# Fetching the source lists
+# ---------------------------------------------------------------------------
+fetch:
+  timeout: 30 # seconds per HTTP request
+  retries: 3
+  max_bytes: 67108864 # refuse bodies larger than 64 MiB
+
+# ---------------------------------------------------------------------------
+# Quality gates for domain lists. A build that violates any of these for any selected
+# source is rejected as a whole and nothing is published.
+# ---------------------------------------------------------------------------
+validation:
+  # (timeouts + network errors) / rules. NXDOMAIN, empty answers and SERVFAIL are
+  # answers about the domain, not signs of a resolver outage, so they do not count.
+  max_error_rate: 0.10
+  # resolved / rules. Catches outages where resolvers answer, but with nothing.
+  min_resolved_rate: 0.30
+  allow_empty: false

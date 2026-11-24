@@ -1,0 +1,5 @@
+# plain CIDR list (one network per line)
+1.0.1.0/24
+1.0.2.0/23
+36.0.0.0/10
+223.255.254.0/24
