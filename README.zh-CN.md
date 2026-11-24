@@ -4,7 +4,7 @@
 
 **自动更新的 [AmneziaVPN](https://amnezia.org) IPv4 分流列表：一份固定的中国大陆网段列表，一份持续刷新的“中国大陆以外需要走 VPN 的网站”列表。**
 
-由 GitHub Actions 每 8 小时刷新（UTC 01:37、09:37、17:37）· 以 GitHub Release 资产发布 · 无需自建服务器
+由 GitHub Actions 每 6 小时刷新（UTC 00:41、06:41、12:41、18:41）· 以 GitHub Release 资产发布 · 无需自建服务器
 
 [![Build](https://github.com/shidevil/amnezia-china-split-tunnel/actions/workflows/build.yml/badge.svg)](https://github.com/shidevil/amnezia-china-split-tunnel/actions/workflows/build.yml)
 [![CI](https://github.com/shidevil/amnezia-china-split-tunnel/actions/workflows/ci.yml/badge.svg)](https://github.com/shidevil/amnezia-china-split-tunnel/actions/workflows/ci.yml)
@@ -25,7 +25,7 @@
 | 你想要… | 下载 | Amnezia 模式 |
 |---|---|---|
 | 中国大陆流量留在 VPN **之外**（固定列表，无需刷新） | [`cn-cidr.json`](https://github.com/shidevil/amnezia-china-split-tunnel/releases/latest/download/cn-cidr.json) | `Directly` |
-| **中国大陆以外**需要走 VPN 的网站（被封锁或境外站点；每 8 小时刷新） | [`proxy.json`](https://github.com/shidevil/amnezia-china-split-tunnel/releases/latest/download/proxy.json) | `Via VPN` |
+| **中国大陆以外**需要走 VPN 的网站（被封锁或境外站点；每 6 小时刷新） | [`proxy.json`](https://github.com/shidevil/amnezia-china-split-tunnel/releases/latest/download/proxy.json) | `Via VPN` |
 
 **`proxy.json` 必须导入 `Via VPN` 模式。** 它列出的是中国大陆以外的网站，如果导入 `Directly` 模式，这些网站会绕过 VPN，与这份列表的用途正好相反。
 
@@ -74,7 +74,7 @@ AmneziaVPN 的分流功能路由的是 **IP 地址和子网**。它从不按域�
 | **Amnezia 模式** | `Directly`：中国大陆流量留在 VPN 之外 | 只能用 `Via VPN`：绝不要导入 `Directly` 模式 |
 | **在 App 内会过期吗？** | 几乎不会：地址分配变化很慢 | 会：DNS 应答会变，需要时不时重新导入 |
 
-GitHub Actions 工作流每 8 小时（UTC 01:37、09:37、17:37，即北京时间 09:37、17:37、01:37）执行一次：
+GitHub Actions 工作流每 6 小时（UTC 00:41、06:41、12:41、18:41，即北京时间 08:41、14:41、20:41、02:41）执行一次：
 
 1. 拉取上游列表，每个都固定到同一个上游 commit，
 2. 解析并规范化规则，
@@ -87,7 +87,7 @@ GitHub Actions 工作流每 8 小时（UTC 01:37、09:37、17:37，即北京时�
 
 ### 特性
 
-- **全自动**：每 8 小时定时运行，也可手动触发；不依赖本地机器或服务器。
+- **全自动**：每 6 小时构建一次，也可手动触发；构建在 GitHub Actions 上运行，不依赖你自己的机器。
 - **两份列表，用途不重叠**：一份不依赖 DNS 的固定列表，一份持续刷新的域名列表。
 - **保留后缀规则**：`.example.com` 与 `example.com` 是不同的规则，输出中也保持区分。
 - **设计上安全**：全部通过才发布、失败率门槛、每个上游的数量下限与合并后网段的规模上限、对写出的文件做 schema 校验，并且在 DNS 解析器不可达时快速中止。
@@ -264,7 +264,7 @@ flowchart LR
 - 非公网单播 IPv4（`0.0.0.0/8`、`10/8`、`100.64/10`、`127/8`、`169.254/16`、`172.16/12`、`192.168/16`、`198.18/15`、组播、保留段、文档段等）会被丢弃。网段表是显式列出的，因此结果不依赖 Python 版本。
 - 并发有上限（固定数量的 worker），并设有全局每秒查询数（QPS）上限以保护公共解析器。
 - 同一次构建中，同一个名称不会被查询两次，即使它出现在多条规则或多个列表中。
-- 不做跨构建的 DNS 缓存：记录 TTL 远短于 8 小时的刷新间隔，缓存几乎不会命中，反而可能返回过期数据。
+- 不做跨构建的 DNS 缓存：记录 TTL 远短于构建间隔（每 6 小时一次），缓存几乎不会命中，反而可能返回过期数据。
 
 每条规则恰好得到下列结果之一：
 
@@ -374,19 +374,18 @@ validation:           # 所有域名数据源的默认值
 
 | | |
 |---|---|
-| **定时** | `37 1,9,17 * * *`（**UTC** 时间 01:37、09:37、17:37）。GitHub 在负载高时可能延迟定时任务，请把 8 小时视为刷新间隔而非保证。 |
+| **触发** | 另一台主机上的 cron 任务每 6 小时（**UTC** 时间 00:41、06:41、12:41、18:41）调用工作流的 `workflow_dispatch` API；工作流自身没有 `schedule:`（见下文）。请把 6 小时视为刷新间隔而非保证。 |
 | **手动运行** | *Actions → Build Amnezia lists → Run workflow* |
 | **手动参数** | `source`：`all` 或逗号分隔的列表，如 `cn-cidr,proxy`（单数据源构建需要已存在的发布，请先完整构建一次）；`force`：即使没有变化也发布 |
 | **发布** | 每次有列表发生变化的构建都会产生一个新的 Release，以构建时间作为标签。它一次性发布并标记为 *Latest*；任何资产都不会被就地替换。每个发布都包含全部列表（没有变化的列表沿用上一版），因此每个发布都是完整的快照。只保留最新的若干个发布（工作流中的 `KEEP_RELEASES`），更早的会被删除。关注了仓库 *Releases* 的用户会收到每个发布的通知。 |
 | **耗时** | 在 GitHub 托管的 runner 上（手动运行，2026-11-24），整次运行约 2 分 40 秒：构建任务用了 142 秒，其中解析 `proxy.json` 的约 27,400 个不同名称用了约 130 秒（约每秒 210 个名称），发布用了 12 秒。上面那次构建在开发者的机器上用了 6 分 14 秒（约每秒 76 个名称）。`max_qps: 300`（每秒最多 300 次查询）的上限意味着最快也要约 1.5 分钟，任务时限为 4 小时。只构建 `cn-cidr` 时完全不做 DNS 解析。 |
 
-工作流包含三个任务：
+工作流包含两个任务：
 
 | 任务 | 权限 | 作用 |
 |---|---|---|
 | `build` | `contents: read` | 拉取、解析、生成、校验；将结果作为工作流 artifact 上传 |
 | `publish` | `contents: write` | 仅在 `build` 产生变化时运行；从最新发布补全资产集，按 `build-info.json` 校验每个文件，以草稿形式创建新发布（带重试）并校验，再一步发布为最新，最后清理旧发布 |
-| `keepalive` | `actions: write` | 尽力而为地重新启用定时（见下文）；绝不会导致运行失败 |
 
 每次运行都会在任务摘要页写入摘要（各列表统计、失败情况），并把 `reports/`（失败列表）作为构建 artifact 上传。
 
@@ -394,7 +393,7 @@ validation:           # 所有域名数据源的默认值
 
 **单数据源与无变化的构建。** 以 `source=proxy` 手动运行只会重建 `proxy.json`，并把它的记录合并进现有的 `build-info.json`，其他列表及其元数据保持原样。生成内容与上次发布字节完全相同的列表会直接沿用上次发布中的版本；对 `cn-cidr.json` 来说，大多数运行都是如此。
 
-**GitHub 可能停用定时工作流。** 在公开仓库中，如果 60 天没有仓库活动，GitHub 会停用定时工作流。由于本项目从不向仓库提交内容，`keepalive` 任务会在每次定时运行时重新启用该工作流。这是尽力而为的措施，其对 GitHub 不活跃计时器的实际效果没有保证；如果定时被停用，任意一次 push 或手动运行即可恢复。
+**为什么没有 `schedule:`。** GitHub 自带的调度器从未启动过这个工作流：工作流处于启用状态、手动运行也正常，但从未产生过任何一次定时运行，其他仓库也有同样的报告（[GitHub Community 讨论 #185355](https://github.com/orgs/community/discussions/185355)）。因此改由另一台主机上的 cron 任务调用 dispatch API，使用的细粒度令牌只能管理本仓库的 Actions。如果你 fork 了本仓库，可以在 `build.yml` 中加回 `schedule:`，或者自己用 cron 任务启动工作流。如果该任务停止（例如令牌过期），构建就会停止，列表也会随之过期，所以请留意 *Latest* 发布的日期。
 
 ### `build-info.json`
 
@@ -447,7 +446,7 @@ nxdomain	.gone.example
 | `GET … failed` | 网络或上游问题；拉取器已经重试过。稍后重新运行。 |
 | 预期的域名不在输出中 | 在 `<source>-failures.txt` 中查找。`nodata` 通常表示该名称本身没有 A 记录（对没有主域名记录的后缀规则和顶级域名很常见）。 |
 | 大量 `servfail` | 大型列表中的失效域名很常见；它们不会触发错误率门槛。 |
-| 定时运行不再出现 | 见上文关于 60 天的说明；手动触发一次 *Run workflow*。 |
+| *Actions* 标签页中没有新的运行 | 启动构建的 cron 任务已停止，或其令牌已过期（见上文）。请手动触发一次 *Run workflow*。 |
 
 手动测试某个解析器：`dig @1.1.1.1 +short A example.com`。
 
@@ -469,7 +468,7 @@ nxdomain	.gone.example
 
 3. **启用 Actions。** 打开 *Actions* 标签页；如果 GitHub 询问，点击 *"I understand my workflows, go ahead and enable them"*（fork 的仓库默认停用工作流）。
 4. **检查令牌权限。** 工作流自行声明了所需权限，因此默认设置即可。如果你的组织强制只读上限，请设置 *Settings → Actions → General → Workflow permissions → Read and write permissions*。
-5. **先运行一次。** *Actions → Build Amnezia lists → Run workflow*（保持默认值）。这会创建第一个发布；之后由定时任务接管。定时任务只会在默认分支上触发。
+5. **先运行一次。** *Actions → Build Amnezia lists → Run workflow*（保持默认值）。这会创建第一个发布。要让它保持更新，请在 `build.yml` 中加入 `schedule:`（定时任务只会在默认分支上触发），或者用 cron 任务通过 dispatch API 启动工作流。
 6. **使用链接：** 替换所有者和仓库名后，使用[快速开始](#快速开始)中的链接。
 
 ## 本地开发
@@ -496,7 +495,7 @@ python -m src.main --source cn-cidr --out-dir dist --reports-dir reports   # 真
 ```text
 .
 ├── .github/workflows/
-│   ├── build.yml         # 定时 + 手动：构建、发布、keepalive
+│   ├── build.yml         # 手动 / API 触发：构建、发布
 │   └── ci.yml            # push / pull request 时运行 lint 与测试
 ├── config.yaml           # 数据源、DNS 设置、质量门槛
 ├── src/
@@ -533,7 +532,7 @@ python -m src.main --source cn-cidr --out-dir dist --reports-dir reports   # 真
 - **地域与解析器依赖。** 同一个域名在不同解析器、不同查询位置、不同时间可能解析到不同地址。这份列表反映的是 GitHub runner 通过所配置的公共解析器看到的结果。
 - **CDN 地址是共享的。** 今天承载某个站点的 IP，也可能同时承载其他无关站点；按 IP 路由可能误伤（或漏掉）其他服务。
 - **后缀规则只是近似。** `.example.com` 的含义是“该域名及所有子域名”，但只解析了主域名 `example.com`。位于不同 IP 上的子域名**不会**被发现，生成器也不会去猜。
-- **两次构建之间 DNS 会变化，而 App 不会跟随。** 8 小时的定时只是刷新间隔，不保证变化会立即体现，而且文件变了也要你重新导入才有用。
+- **两次构建之间 DNS 会变化，而 App 不会跟随。** 每 6 小时构建一次只是刷新间隔，不保证变化会立即体现，而且文件变了也要你重新导入才有用。
 - **部分域名没有 A 记录。** NXDOMAIN、空应答和仅有 IPv6 的主机会被排除。纯顶级域名规则则根本无法用 IP 表达。
 - **列表很大。** 如果你加入 Loyalsoldier 的大型列表（`reject` 约 200,000 条规则，`direct` 约 110,000 条），文件会变得非常大，客户端处理它们可能很慢，甚至无法导入。
 - **IDN 与非 DNS 规则。** 非 ASCII 名称、通配符和 IP 字面量会作为无效行被报告并跳过（当前 Loyalsoldier 列表中没有这类规则）。

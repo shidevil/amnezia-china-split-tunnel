@@ -59,18 +59,15 @@ def test_relative_links_point_at_files_that_exist(readme):
         assert (ROOT / target).exists(), target
 
 
-@pytest.mark.parametrize("readme", [EN, ZH], ids=["en", "zh-CN"])
-def test_readmes_state_the_cron_and_run_times_that_the_workflow_really_has(readme):
-    import yaml
-
-    workflow = yaml.safe_load((ROOT / ".github" / "workflows" / "build.yml").read_text("utf-8"))
-    cron = workflow.get("on", workflow.get(True))["schedule"][0]["cron"]
-    minute, hours = cron.split()[:2]
-    # The cron lists its hours explicitly, so every run time is spelled out in the README too.
-    times = [f"{int(hour):02d}:{int(minute):02d}" for hour in hours.split(",")]
-    assert f"`{cron}`" in readme
-    for time in times:
-        assert time in readme, f"the README does not say that it runs at {time} UTC"
+def test_every_mention_of_the_refresh_interval_says_the_same_in_both_readmes():
+    # The builds are started by a cron job on another host, so nothing in the repository can
+    # check the interval it really runs at. When that interval changes, change it here and in
+    # every sentence of both READMEs: this stops one sentence, or one language, from keeping
+    # the old number.
+    en = re.findall(r"(?i)\bevery (\d+) hours\b", EN)
+    zh = re.findall(r"每 (\d+) 小时", ZH)
+    assert en and zh
+    assert set(en) | set(zh) == {"6"}
 
 
 @pytest.mark.parametrize("readme", [EN, ZH], ids=["en", "zh-CN"])

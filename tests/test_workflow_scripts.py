@@ -1016,7 +1016,7 @@ def test_a_full_build_runs_without_a_previous_build_info(tmp_path):
     assert calls == ["python -m src.main"]
 
 
-def test_scheduled_runs_have_empty_inputs_and_build_everything(tmp_path):
+def test_a_run_with_empty_inputs_builds_everything(tmp_path):
     done, calls, _ = run_script(tmp_path, build_script(), env={"SOURCE": "", "FORCE": ""})
     assert done.returncode == 0
     assert calls == ["python -m src.main"]

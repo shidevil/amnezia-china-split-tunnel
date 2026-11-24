@@ -26,22 +26,21 @@ def test_workflow_files_exist():
     assert {f.name for f in FILES} >= {"build.yml", "ci.yml"}
 
 
-def test_build_runs_every_eight_hours_and_can_be_started_manually():
-    on = triggers(load("build.yml"))
-    assert on["schedule"] == [{"cron": "37 1,9,17 * * *"}]
+def test_build_is_only_started_through_workflow_dispatch():
+    # GitHub's own scheduler never started this workflow (not one scheduled run was ever
+    # created), so a cron job on another host calls the dispatch API instead. A `schedule:`
+    # left in the file would do nothing today, and the day GitHub fixed it, it would start a
+    # second build next to the cron job's.
+    workflow = load("build.yml")
+    on = triggers(workflow)
+    assert set(on) == {"workflow_dispatch"}
     inputs = on["workflow_dispatch"]["inputs"]
     assert set(inputs) == {"source", "force"}
     assert inputs["source"]["default"] == "all"
     assert inputs["force"]["type"] == "boolean"
-
-
-def test_the_schedule_avoids_the_top_of_the_hour():
-    # GitHub documents that scheduled runs are delayed at the start of every hour and may be
-    # dropped under load, and its advice is to run at a different time of the hour. A dropped
-    # run leaves no failure behind, so the schedule would just silently never fire.
-    cron = triggers(load("build.yml"))["schedule"][0]["cron"]
-    minute = cron.split()[0]
-    assert minute.isdigit() and int(minute) != 0, cron
+    # and no job may wait for an event that can no longer happen
+    for name, job in workflow["jobs"].items():
+        assert "schedule" not in str(job.get("if", "")), name
 
 
 @pytest.mark.parametrize("path", FILES, ids=lambda p: p.name)
@@ -58,7 +57,7 @@ def test_permissions_are_denied_by_default_and_minimal_per_job():
     jobs = workflow["jobs"]
     assert jobs["build"]["permissions"] == {"contents": "read"}
     assert jobs["publish"]["permissions"] == {"contents": "write"}
-    assert jobs["keepalive"]["permissions"] == {"actions": "write"}
+    assert set(jobs) == {"build", "publish"}  # a new job needs its permissions decided here
 
 
 def test_only_the_publish_job_can_write_contents():
@@ -159,10 +158,9 @@ def test_user_controlled_inputs_never_appear_inside_shell_scripts():
             assert "${{" not in step.get("run", ""), step.get("name", step)
 
 
-def test_the_build_job_cannot_publish_and_the_schedule_job_cannot_fail_the_run():
+def test_the_build_job_cannot_publish():
     jobs = load("build.yml")["jobs"]
     assert "gh release upload" not in steps_text(jobs["build"])
-    assert jobs["keepalive"]["continue-on-error"] is True
 
 
 def test_build_has_a_timeout_that_fits_inside_the_six_hour_job_limit():

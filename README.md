@@ -4,7 +4,7 @@
 
 **Auto-updating IPv4 split-tunnel lists for [AmneziaVPN](https://amnezia.org): a fixed list of mainland-China networks, and a refreshed list of websites outside China that need the VPN.**
 
-Refreshed every 8 hours (01:37, 09:37, 17:37 UTC) by GitHub Actions · Published as GitHub Release assets · No server required
+Refreshed every 6 hours (00:41, 06:41, 12:41, 18:41 UTC) by GitHub Actions · Published as GitHub Release assets · No server required
 
 [![Build](https://github.com/shidevil/amnezia-china-split-tunnel/actions/workflows/build.yml/badge.svg)](https://github.com/shidevil/amnezia-china-split-tunnel/actions/workflows/build.yml)
 [![CI](https://github.com/shidevil/amnezia-china-split-tunnel/actions/workflows/ci.yml/badge.svg)](https://github.com/shidevil/amnezia-china-split-tunnel/actions/workflows/ci.yml)
@@ -25,7 +25,7 @@ Pick **one** of the two lists. They are alternatives, not a pair ([why](#2-impor
 | If you want… | Download | Amnezia mode |
 |---|---|---|
 | Mainland-China traffic to stay **outside** the VPN (fixed list, no refreshing needed) | [`cn-cidr.json`](https://github.com/shidevil/amnezia-china-split-tunnel/releases/latest/download/cn-cidr.json) | `Directly` |
-| Websites **outside China** that need the VPN (blocked or foreign; refreshed every 8 hours) | [`proxy.json`](https://github.com/shidevil/amnezia-china-split-tunnel/releases/latest/download/proxy.json) | `Via VPN` |
+| Websites **outside China** that need the VPN (blocked or foreign; refreshed every 6 hours) | [`proxy.json`](https://github.com/shidevil/amnezia-china-split-tunnel/releases/latest/download/proxy.json) | `Via VPN` |
 
 **`proxy.json` must be imported in `Via VPN` mode.** It lists websites outside China, so in `Directly` mode they would skip the VPN, the opposite of what the list is for.
 
@@ -74,7 +74,7 @@ This project is built around that. It publishes exactly **two kinds of list**, a
 | **Amnezia mode** | `Directly`: China stays outside the VPN | `Via VPN` only: never import it in `Directly` mode |
 | **Goes stale in the app?** | barely: allocations change slowly | yes: DNS answers change, so re-import it from time to time |
 
-Every 8 hours (01:37, 09:37 and 17:37 UTC) a GitHub Actions workflow:
+Every 6 hours (00:41, 06:41, 12:41 and 18:41 UTC) a GitHub Actions workflow:
 
 1. fetches the upstream lists, each pinned to one upstream commit,
 2. parses and normalises the rules,
@@ -87,7 +87,7 @@ If anything goes wrong while building (a DNS outage, an empty or truncated upstr
 
 ### Highlights
 
-- **Fully automated**: scheduled every 8 hours plus manual runs; no local machine or server involved.
+- **Fully automated**: built every 6 hours plus manual runs; the build runs on GitHub Actions, and no machine of yours is involved.
 - **Two lists, no overlap in purpose**: one fixed list that does not depend on DNS, one refreshed domain list.
 - **Suffix rules preserved**: `.example.com` and `example.com` are different rules and stay different in the output.
 - **Safe by construction**: all-or-nothing publishing, failure-rate gates, a size floor for every upstream and a size ceiling for the merged network list, schema validation of the written files, and a fail-fast abort when the DNS resolvers are unreachable.
@@ -264,7 +264,7 @@ This applies to domain lists only.
 - Addresses that are not public unicast IPv4 (`0.0.0.0/8`, `10/8`, `100.64/10`, `127/8`, `169.254/16`, `172.16/12`, `192.168/16`, `198.18/15`, multicast, reserved, documentation ranges, …) are dropped. The range table is explicit, so results do not depend on the Python version.
 - Concurrency is bounded (a fixed pool of workers) and a global queries-per-second cap protects the public resolvers.
 - The same name is never queried twice in a build, even when it appears in several rules or lists.
-- No cross-build DNS cache: record TTLs are far shorter than the 8-hour refresh interval, so a cache would almost never hit and could only serve stale data.
+- No cross-build DNS cache: record TTLs are far shorter than the gap between builds (one every 6 hours), so a cache would almost never hit and could only serve stale data.
 
 Each rule ends in exactly one outcome:
 
@@ -374,19 +374,18 @@ Unknown keys are rejected, so a typo such as `enabeld: false` can never silently
 
 | | |
 |---|---|
-| **Schedule** | `37 1,9,17 * * *` (01:37, 09:37, 17:37 **UTC**). GitHub may delay scheduled runs under load; treat 8 hours as a refresh interval, not a guarantee. |
+| **Trigger** | A cron job on a separate host calls the workflow's `workflow_dispatch` API every 6 hours (00:41, 06:41, 12:41, 18:41 **UTC**); the workflow has no `schedule:` of its own (see below). Treat 6 hours as a refresh interval, not a guarantee. |
 | **Manual run** | *Actions → Build Amnezia lists → Run workflow* |
 | **Manual inputs** | `source`: `all` or a comma-separated list such as `cn-cidr,proxy` (a single-source build needs an existing release, so run a full build first); `force`: publish even if nothing changed |
 | **Release** | A new release for every build in which a list changed, tagged with the build time. It is published all at once and marked *Latest*; nothing is ever replaced in place. Every release holds every list (the unchanged ones are carried over), so each is a complete snapshot. Only the newest releases are kept (`KEEP_RELEASES` in the workflow); older ones are deleted. People watching the repository for *Releases* are notified of each one. |
 | **Runtime** | On a GitHub-hosted runner (manual run, 2026-11-24) the whole run took about 2 min 40 s: the build job took 142 s, of which resolving the roughly 27,400 distinct names of `proxy.json` took about 130 s (about 210 names/s), and publishing took 12 s. The build above took 6 min 14 s on the developer's machine (about 76 names/s). The `max_qps: 300` cap puts a floor of about 1.5 minutes under it, and the job limit is 4 hours. A build of `cn-cidr` alone does no DNS at all. |
 
-The workflow has three jobs:
+The workflow has two jobs:
 
 | Job | Permission | Role |
 |---|---|---|
 | `build` | `contents: read` | fetch, resolve, generate, validate; uploads the result as a workflow artifact |
 | `publish` | `contents: write` | runs only if `build` produced changes; completes the asset set from the latest release, checks every file against `build-info.json`, builds the new release as a draft (with retries), verifies it, publishes it as the latest in one step, then prunes old releases |
-| `keepalive` | `actions: write` | best-effort re-enable of the schedule (see below); can never fail a run |
 
 Every run writes a summary (per-list counts, failures) to the job summary page, and uploads `reports/` (failure lists) as a build artifact.
 
@@ -394,7 +393,7 @@ Every run writes a summary (per-list counts, failures) to the job summary page, 
 
 **Single-source and unchanged builds.** A manual run with `source=proxy` rebuilds only `proxy.json` and merges its record into the existing `build-info.json`, so the other lists and their metadata stay as they were. Lists whose generated content is byte-identical to the previous release are carried over from it as they are; for `cn-cidr.json` that is most runs.
 
-**Scheduled workflows can be switched off by GitHub.** In public repositories GitHub disables scheduled workflows after 60 days without repository activity. Because this project never commits to the repository, the `keepalive` job re-enables the workflow on every scheduled run. This is a best-effort measure whose effect on GitHub's inactivity timer is not guaranteed; if the schedule is ever disabled, any push or a manual run revives it.
+**Why there is no `schedule:`.** GitHub's own scheduler never started this workflow: it was active and manual runs worked, yet not one scheduled run was ever created, which other repositories report too ([GitHub Community discussion #185355](https://github.com/orgs/community/discussions/185355)). So a cron job on a separate host calls the dispatch API with a fine-grained token that can only manage Actions on this one repository. If you fork this repository, either add a `schedule:` block to `build.yml` or start the workflow from a cron job of your own. If that job stops (an expired token, for example), builds simply stop and the lists go stale, so the date of the *Latest* release is the thing to check.
 
 ### `build-info.json`
 
@@ -447,7 +446,7 @@ Download them from the run page: *Actions → the run → Artifacts → `build-r
 | `GET … failed` | Network or upstream problem; the fetcher already retried. Re-run later. |
 | A domain you expect is missing | Look it up in `<source>-failures.txt`. `nodata` usually means the name has no A record of its own (common for suffix rules on apex-less zones and TLDs). |
 | Many `servfail` entries | Normal for dead or lame domains in large lists; they do not trip the error gate. |
-| The scheduled run stopped appearing | See the 60-day note above; trigger *Run workflow* once. |
+| No new runs in the *Actions* tab | The cron job that starts the build has stopped, or its token expired (see above). Start one by hand with *Run workflow*. |
 
 To test a resolver by hand: `dig @1.1.1.1 +short A example.com`.
 
@@ -469,7 +468,7 @@ To test a resolver by hand: `dig @1.1.1.1 +short A example.com`.
 
 3. **Enable Actions.** Open the *Actions* tab; if GitHub asks, click *"I understand my workflows, go ahead and enable them"* (forks start with workflows disabled).
 4. **Check the token permissions.** The workflows declare their own permissions, so the default setting is fine. If your organisation enforces a read-only cap, set *Settings → Actions → General → Workflow permissions → Read and write permissions*.
-5. **Run it once.** *Actions → Build Amnezia lists → Run workflow* (leave the defaults). This creates the first release; scheduled runs take over from there. Scheduled runs only fire from the default branch.
+5. **Run it once.** *Actions → Build Amnezia lists → Run workflow* (leave the defaults). This creates the first release. To keep it fresh, add a `schedule:` block to `build.yml` (scheduled runs only fire from the default branch), or start the workflow from a cron job through the dispatch API.
 6. **Use the links** from [Quick start](#quick-start), after replacing the owner and repository name.
 
 ## Local development
@@ -496,7 +495,7 @@ A source `url` may also be a `file://` URL, which is how the test-suite builds f
 ```text
 .
 ├── .github/workflows/
-│   ├── build.yml         # schedule + manual: build, publish, keepalive
+│   ├── build.yml         # manual / API-triggered: build, publish
 │   └── ci.yml            # lint + tests on push / pull request
 ├── config.yaml           # sources, DNS settings, quality gates
 ├── src/
@@ -533,7 +532,7 @@ This file is an **IP snapshot of DNS answers**, not a live domain-matching syste
 - **Geography and resolver dependence.** A domain can resolve to different addresses depending on the resolver, the location it is queried from, and the time. The list reflects what the GitHub runner saw through the configured public resolvers.
 - **CDN addresses are shared.** An IP that serves one site today may serve unrelated sites too; routing by IP can catch (or miss) other services.
 - **Suffix rules are only approximated.** `.example.com` means "the domain and all subdomains", but only the apex `example.com` is resolved. Subdomains on different IPs are **not** discovered, and the generator does not guess them.
-- **DNS changes between builds, and the app does not follow.** The 8-hour schedule is a refresh interval, not a promise that changes show up immediately, and a changed file only helps once you import it.
+- **DNS changes between builds, and the app does not follow.** Building every 6 hours is a refresh interval, not a promise that changes show up immediately, and a changed file only helps once you import it.
 - **Some domains have no A record.** NXDOMAIN, empty answers and IPv6-only hosts are left out. Bare top-level-domain rules cannot be expressed as IPs at all.
 - **Large lists.** If you add one of the big Loyalsoldier lists (`reject` has about 200,000 rules, `direct` about 110,000), the file gets very large and the client may be slow with it or unable to import it.
 - **IDN and non-DNS rules.** Non-ASCII names, wildcards and IP literals are reported as invalid lines and skipped (none exist in the current Loyalsoldier lists).
