@@ -4,7 +4,7 @@
 
 **Auto-updating IPv4 split-tunnel lists for [AmneziaVPN](https://amnezia.org): a fixed list of mainland-China networks, and a refreshed list of websites outside China that need the VPN.**
 
-Refreshed every 6 hours by GitHub Actions · Published as GitHub Release assets · No server required
+Refreshed every 6 hours (00:00, 06:00, 12:00, 18:00 UTC) by GitHub Actions · Published as GitHub Release assets · No server required
 
 [![Build](https://github.com/shidevil/amnezia-china-split-tunnel/actions/workflows/build.yml/badge.svg)](https://github.com/shidevil/amnezia-china-split-tunnel/actions/workflows/build.yml)
 [![CI](https://github.com/shidevil/amnezia-china-split-tunnel/actions/workflows/ci.yml/badge.svg)](https://github.com/shidevil/amnezia-china-split-tunnel/actions/workflows/ci.yml)
@@ -73,7 +73,7 @@ This project is built around that. It publishes exactly **two kinds of list**, a
 | **Amnezia mode** | `Directly`: China stays outside the VPN | `Via VPN` only: never import it in `Directly` mode |
 | **Goes stale in the app?** | barely: allocations change slowly | yes: DNS answers change, so re-import it from time to time |
 
-Every 6 hours a GitHub Actions workflow:
+Every 6 hours (00:00, 06:00, 12:00 and 18:00 UTC) a GitHub Actions workflow:
 
 1. fetches the upstream lists, each pinned to one upstream commit,
 2. parses and normalises the rules,
@@ -377,7 +377,7 @@ Unknown keys are rejected, so a typo such as `enabeld: false` can never silently
 | **Manual run** | *Actions → Build Amnezia lists → Run workflow* |
 | **Manual inputs** | `source`: `all` or a comma-separated list such as `cn-cidr,proxy` (a single-source build needs an existing release, so run a full build first); `force`: publish even if nothing changed |
 | **Release** | One rolling release, tag `latest`. Assets are replaced in place on every successful build, and only when their content changed. |
-| **Runtime** | Resolving the 27,402 distinct names of `proxy.json` took about 6 minutes (about 76 names/s) in the build above; the whole run took 6 min 14 s. This was **not** measured on a GitHub-hosted runner. The `max_qps: 300` cap puts a floor of about 1.5 minutes under it, and the job limit is 4 hours. A build of `cn-cidr` alone does no DNS at all. |
+| **Runtime** | On a GitHub-hosted runner (manual run, 2026-11-24) the whole run took about 2 min 40 s: the build job took 142 s, of which resolving the roughly 27,400 distinct names of `proxy.json` took about 130 s (about 210 names/s), and publishing took 12 s. The build above took 6 min 14 s on the developer's machine (about 76 names/s). The `max_qps: 300` cap puts a floor of about 1.5 minutes under it, and the job limit is 4 hours. A build of `cn-cidr` alone does no DNS at all. |
 
 The workflow has three jobs:
 
