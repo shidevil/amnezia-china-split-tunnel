@@ -57,6 +57,7 @@ Pick **one** of the two lists. They are alternatives, not a pair ([why](#2-impor
 - [Local development](#local-development)
 - [Project layout](#project-layout)
 - [Limitations: read this before relying on the lists](#limitations-read-this-before-relying-on-the-lists)
+- [Other source lists we tested](#other-source-lists-we-tested)
 - [Acknowledgements](#acknowledgements)
 - [License](#license)
 
@@ -537,6 +538,29 @@ This file is an **IP snapshot of DNS answers**, not a live domain-matching syste
 - **Large lists.** If you add one of the big Loyalsoldier lists (`reject` has about 200,000 rules, `direct` about 110,000), the file gets very large and the client may be slow with it or unable to import it.
 - **IDN and non-DNS rules.** Non-ASCII names, wildcards and IP literals are reported as invalid lines and skipped (none exist in the current Loyalsoldier lists).
 - **Resolver blocking.** If a public resolver throttles a shared GitHub runner IP, a build may fail the error gate. That is intentional: it keeps the previous release instead of publishing an incomplete one. The fail-fast abort only catches a network that is down from the start; if the resolvers go silent part-way through a run, the run is not cut short. It finishes (or reaches the 4-hour job limit) and then fails without publishing, so the cost is wasted runner time, never a bad release.
+
+## Other source lists we tested
+
+Before settling on the two upstream lists of `cn-cidr.json`, we measured four other public mainland-China IPv4 lists against their union. None was added: two contain nothing new, and two would add ranges that are not in China.
+
+These are one-off measurements from 2026-11-24, made with this project's own CIDR parser against that day's `cn-cidr.json` (6,793 CIDRs, 359,175,656 addresses). They are not part of the build, and the lists keep changing, so read them as a snapshot.
+
+| List | CIDRs | Addresses | Already in `cn-cidr.json` | What it would add |
+|---|---:|---:|---|---|
+| [mayaxcn/china-ip-list](https://github.com/mayaxcn/china-ip-list) `chnroute.txt` | 5,697 | 351.4M | one of our sources | none |
+| [Xiaobei09/Rule-Provider](https://github.com/Xiaobei09/Rule-Provider) `CN.txt` | 6,635 | 353.3M | one of our sources | none |
+| [fernvenue/chn-cidr-list](https://github.com/fernvenue/chn-cidr-list) `ipv4.txt` | 5,641 | 345.7M | 100.00% | nothing |
+| [windmgc/chnroute_auto](https://github.com/windmgc/chnroute_auto) `chnroute-v4` | 5,500 | 342.9M | 100.00% | nothing |
+| [metowolf/iplist](https://github.com/metowolf/iplist) `CN.txt` | 5,668 | 348.3M | 99.62% | 1,337,968 addresses (479 CIDRs, +0.37%) |
+| [SukkaW/chnroutes2-optimized](https://github.com/SukkaW/chnroutes2-optimized) `chnroutes.txt` | 3,893 | 282.1M | 99.92% | 235,776 addresses (155 CIDRs, +0.066%) |
+
+CIDR counts are taken after adjacent and overlapping networks are merged. windmgc/chnroute_auto publishes 8,798 lines, and Xiaobei09's file has 7,054 IPv4 lines plus 2,982 IPv6 lines that are skipped. The first two rows are the sources we use, shown for comparison.
+
+- **Nothing new: fernvenue/chn-cidr-list and windmgc/chnroute_auto.** The first is built from APNIC and BGP/ASN data, is BSD-3-Clause licensed and updates daily. The second is built from APNIC's delegation file alone, and GitHub reports no licence for it. Every address of both is already in the union.
+- **Ranges registered outside China: metowolf/iplist.** We looked up the registry record of the first address of its 24 largest additional blocks (67% of the added addresses); 21 lookups returned a record. None is registered to China: they belong to Singapore networks, to Amazon, Apple and ByteDance, and to Huawei Cloud's regions in Chile, South Africa, Egypt and Singapore. 2 of the 21,015 IP addresses in `proxy.json` fall into the added space, one of them in a Huawei Cloud Singapore range, and they would have bypassed the VPN. GitHub reports no licence for the repository.
+- **Smaller, and not a superset: Sukka's chnroutes2.** It is built from BGP route announcements, and 77.3 million addresses of the union (21.5%) are not in it. Its 14 largest additional blocks (57% of the added addresses) are registered in Hong Kong, Pakistan, Vietnam and Japan, plus one ARIN block (LILLY-NET). 6 IP addresses in `proxy.json` fall into the added space, five of them Zoho's and one sina.com.hk's, and they would have bypassed the VPN. Its licence is CC BY-SA 2.0 + MIT, and the share-alike terms could apply to a list derived from it. We have not taken a legal view on that.
+
+The two sources of `cn-cidr.json` therefore stay as they are. To try another list yourself, add its `raw.githubusercontent.com` URL to the `url` of `cn-cidr` in `config.yaml`; several URLs are merged into one list (see [Configuration](#configuration)).
 
 ## Acknowledgements
 

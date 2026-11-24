@@ -57,6 +57,7 @@
 - [本地开发](#本地开发)
 - [项目结构](#项目结构)
 - [局限性：使用前请先阅读](#局限性使用前请先阅读)
+- [我们测试过的其他数据源](#我们测试过的其他数据源)
 - [致谢](#致谢)
 - [许可证](#许可证)
 
@@ -537,6 +538,29 @@ python -m src.main --source cn-cidr --out-dir dist --reports-dir reports   # 真
 - **列表很大。** 如果你加入 Loyalsoldier 的大型列表（`reject` 约 200,000 条规则，`direct` 约 110,000 条），文件会变得非常大，客户端处理它们可能很慢，甚至无法导入。
 - **IDN 与非 DNS 规则。** 非 ASCII 名称、通配符和 IP 字面量会作为无效行被报告并跳过（当前 Loyalsoldier 列表中没有这类规则）。
 - **解析器封锁。** 如果公共解析器对共享的 GitHub runner IP 限流，构建可能触发错误率门槛。这是有意为之：宁可保留上一次发布，也不发布不完整的结果。快速失败只能识别“一开始就不通”的网络；如果解析器在运行中途才停止应答，运行不会被提前终止，而是会跑完（或达到 4 小时的任务时限），然后失败且不发布任何内容。代价只是浪费 runner 时间，不会产生错误的发布。
+
+## 我们测试过的其他数据源
+
+在确定 `cn-cidr.json` 的两份上游列表之前，我们把另外四份公开的中国大陆 IPv4 列表与它们的并集做了对比。四份都没有被加入：两份没有任何新内容，另两份会加入不在中国大陆的网段。
+
+以下是 2026-11-24 的一次性测量，用本项目自己的 CIDR 解析器，对照当天的 `cn-cidr.json`（6,793 个 CIDR，359,175,656 个地址）。它们不属于构建流程，而且这些列表一直在变化，请把它当作一次快照。
+
+| 列表 | CIDR 数 | 地址数 | 已在 `cn-cidr.json` 中 | 加入后会新增 |
+|---|---:|---:|---|---|
+| [mayaxcn/china-ip-list](https://github.com/mayaxcn/china-ip-list) `chnroute.txt` | 5,697 | 351.4M | 我们的来源之一 | 无 |
+| [Xiaobei09/Rule-Provider](https://github.com/Xiaobei09/Rule-Provider) `CN.txt` | 6,635 | 353.3M | 我们的来源之一 | 无 |
+| [fernvenue/chn-cidr-list](https://github.com/fernvenue/chn-cidr-list) `ipv4.txt` | 5,641 | 345.7M | 100.00% | 无新增 |
+| [windmgc/chnroute_auto](https://github.com/windmgc/chnroute_auto) `chnroute-v4` | 5,500 | 342.9M | 100.00% | 无新增 |
+| [metowolf/iplist](https://github.com/metowolf/iplist) `CN.txt` | 5,668 | 348.3M | 99.62% | 1,337,968 个地址（479 个 CIDR，+0.37%） |
+| [SukkaW/chnroutes2-optimized](https://github.com/SukkaW/chnroutes2-optimized) `chnroutes.txt` | 3,893 | 282.1M | 99.92% | 235,776 个地址（155 个 CIDR，+0.066%） |
+
+CIDR 数是合并相邻和重叠网段之后的数量。windmgc/chnroute_auto 发布了 8,798 行；Xiaobei09 的文件有 7,054 行 IPv4，另有 2,982 行 IPv6 被跳过。前两行是我们正在使用的来源，列在这里作对照。
+
+- **没有新内容：fernvenue/chn-cidr-list 与 windmgc/chnroute_auto。** 前者基于 APNIC 与 BGP/ASN 数据，采用 BSD-3-Clause 许可，每天更新；后者只基于 APNIC 的分配文件，GitHub 显示它没有许可证。两者的每一个地址都已在并集之中。
+- **注册在中国大陆之外的网段：metowolf/iplist。** 我们对它新增的 24 个最大网段（占新增地址的 67%）查询了首个地址的注册记录，其中 21 个查到了记录。没有一个注册在中国：它们属于新加坡的网络、Amazon、Apple 和字节跳动，以及华为云在智利、南非、埃及和新加坡的区域。`proxy.json` 的 21,015 个 IP 地址中有 2 个落在新增的空间里，其中一个在华为云新加坡的网段内，它们本会绕过 VPN。GitHub 显示该仓库没有许可证。
+- **更小，且不是超集：Sukka 的 chnroutes2。** 它基于 BGP 路由公告，并集中有 7,733 万个地址（21.5%）不在它里面。它新增的最大 14 个网段（占新增地址的 57%）注册在香港、巴基斯坦、越南和日本，另有一个 ARIN 的网段（LILLY-NET）。`proxy.json` 中有 6 个 IP 地址落在新增的空间里，其中五个属于 Zoho，一个属于 sina.com.hk，它们本会绕过 VPN。它的许可证是 CC BY-SA 2.0 + MIT，其“相同方式共享”条款可能适用于由它派生的列表。我们没有就此做法律判断。
+
+因此，`cn-cidr.json` 的两个来源保持不变。如果你想自己试另一份列表，把它的 `raw.githubusercontent.com` 地址加到 `config.yaml` 里 `cn-cidr` 的 `url` 中即可；多个 URL 会合并成一份列表（见[配置](#配置)）。
 
 ## 致谢
 
