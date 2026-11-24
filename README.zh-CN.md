@@ -40,8 +40,6 @@
 
 *截图来自 [Amnezia 官方文档](https://docs.amnezia.org/documentation/instructions/vpn-split-tunneling)。它展示的是 App 的旧版布局：模式是下拉菜单（`Directly` 在其中显示为 `Addresses from the list should not be accessed via VPN`，`Via VPN` 显示为 `Only the sites listed here will be accessed through the VPN`），导入选项位于 **Import** 之下。在当前版本中，这些选项直接列在 **⋮** 菜单中。*
 
-> **尚未在 App 内测试**（见[局限性](#局限性使用前请先阅读)）。菜单名称依据 Amnezia 5.1.1.10（当前版本）的源代码；其他版本可能不同。如果导入后 VPN 连不上，很可能是你的服务器 IP 地址落在了某个已导入的网段内；Amnezia 的 FAQ 建议找出该网段并将其删除。如果 App 显示“Default server does not support split tunneling function”，说明该服务器无法使用这些列表。
-
 ---
 
 ## 目录
@@ -129,7 +127,7 @@ curl -fLO https://github.com/shidevil/amnezia-china-split-tunnel/releases/latest
 
 当前版本的 App（5.1.1.10）把这两种模式显示为名为 `Via VPN` 和 `Directly` 的两个分段按钮。旧版本显示的是下拉菜单：`Directly` 对应 `Addresses from the list should not be accessed via VPN`，`Via VPN` 对应 `Only the sites listed here will be accessed through the VPN`。
 
-**这两个文件是二选一，而不是一对。** App 同一时间只有一种模式生效，并且每种模式各自保存一份站点列表，所以两个都导入没有意义：在 `Directly` 模式下 `proxy.json` 会被忽略，在 `Via VPN` 模式下 `cn-cidr.json` 会被忽略。先用哪一个由你决定。`cn-cidr.json` 永远不需要刷新，但它使用的是 Amnezia 文档最不推荐的模式（文档只推荐把该模式用于本地和运营商网络），而且有几千个条目，没有人在 App 内测试过。`proxy.json` 使用的是推荐的 `Via VPN` 模式，但会随着 DNS 应答的变化而过期。在依赖其中任何一个之前，请先在你的设备上试一试（见[局限性](#局限性使用前请先阅读)）。
+**这两个文件是二选一，而不是一对。** App 同一时间只有一种模式生效，并且每种模式各自保存一份站点列表，所以两个都导入没有意义：在 `Directly` 模式下 `proxy.json` 会被忽略，在 `Via VPN` 模式下 `cn-cidr.json` 会被忽略。先用哪一个由你决定。`cn-cidr.json` 永远不需要刷新，但它使用的是 Amnezia 文档最不推荐的模式（文档只推荐把该模式用于本地和运营商网络）。`proxy.json` 使用的是推荐的 `Via VPN` 模式，但会随着 DNS 应答的变化而过期。在依赖其中任何一个之前，请先在你的设备上试一试（见[局限性](#局限性使用前请先阅读)）。
 
 ## 可用列表
 
@@ -520,21 +518,13 @@ python -m src.main --source cn-cidr --out-dir dist --reports-dir reports   # 真
 
 ### Amnezia 客户端如何处理这些文件
 
-以下内容读自客户端源代码（[amnezia-client](https://github.com/amnezia-vpn/amnezia-client)，5.x）及其[分流文档](https://docs.amnezia.org/documentation/instructions/vpn-split-tunneling)。**这一切都没有在 App 内端到端测试过。**
+以下内容读自客户端源代码（[amnezia-client](https://github.com/amnezia-vpn/amnezia-client)，5.x）及其[分流文档](https://docs.amnezia.org/documentation/instructions/vpn-split-tunneling)。
 
 - **只有 IP 地址和子网会被路由。** 主机名从不与流量匹配。对于域名条目，只有存放在 `ips` 中的地址有效；对于 CIDR 条目，则是网段本身。
 - **导入时不做解析，且只读取一次文件。** 没有发现订阅 URL 的方式，所以刷新列表就意味着手动导入新文件。文档对域名也是这么说的：App 保存它手上的地址，并且不会自动更新。
 - **桌面客户端每次连接时会重新解析已保存的主机名**，并且只增加地址：旧地址不会被移除。在移动端客户端中没有发现类似机制，连接期间也不会刷新。以点开头的条目（后缀规则）是否会被重新解析，目前不清楚。
 - **同一时间只有一种模式生效**，每种模式各有自己保存的列表（见[快速开始](#快速开始)）。
-- **文档并不倾向于 `cn-cidr.json` 所用的模式。** 文档称 `Via VPN` 模式（文档中的“Mode 1”）是 Windows、iOS、macOS 和 Linux 上最有效且推荐的方法，而 `Directly` 模式（“Mode 2”）只推荐用于本地和运营商网络。把一份国家规模的列表导入 `Directly` 模式，是本项目自己的设计，而不是 Amnezia 文档中描述的用法。
-- **每个地址和子网都会变成一条路由。** 客户端和操作系统能承受多少条，目前不清楚。`cn-cidr.json` 有几千个条目；在依赖它之前，请先在你的设备上试一试。
-
-### 固定列表（`cn-cidr.json`）
-
-- **它依据的是注册信息，而不是地理位置。** 上游列表来源于 APNIC 注册数据（以及 BGP 数据），它说明的是地址块分配给了谁，而不是服务器实际在哪里。在中国大陆注册、却被境外主机使用的网段，以及在境外注册、却在中国大陆使用的网段，都会被误判。上游项目自己也这么说。
-- **它是并集。** 只被两份上游中的一份列出的网段也会被包含（见[可用列表](#可用列表)）。
-- **“固定”指变化缓慢，而不是一成不变。** 该文件每 6 小时重建一次，仅在内容变化时才重新发布。2026-11-24 根据上游 commit 历史测得：合并后的列表在之前 24 小时内没有变化；在之前 7 天内增长了 1.6%（580 万个地址，没有任何移除），全部来自 mayaxcn 的列表（另一份列表那一周没有变化）；而在此之前的 23 天里变化约 0.007%（新增或移除了大约 23,000 个地址）。一个月的历史不足以确定一个变化速率，但每隔几个月重新导入一次看起来已经够用：错过一次更新，只意味着少数新网段仍然走 VPN。
-- **仅 IPv4。** 客户端只路由 IPv4，所以 IPv6 行会被丢弃。
+- **每个地址和子网都会变成一条路由。** `cn-cidr.json` 有 6,793 个条目，在开发者自己的测试中导入没有问题。其他客户端和操作系统能承受多少条路由，目前不清楚，所以在依赖它之前，请先在你的设备上试一试。
 
 ### 更新列表（`proxy.json`）
 

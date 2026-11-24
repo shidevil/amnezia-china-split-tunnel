@@ -40,8 +40,6 @@ Pick **one** of the two lists. They are alternatives, not a pair ([why](#2-impor
 
 *Screenshot from the [Amnezia documentation](https://docs.amnezia.org/documentation/instructions/vpn-split-tunneling). It shows an older layout of the app: the mode is a drop-down (`Directly` appears there as `Addresses from the list should not be accessed via VPN`, `Via VPN` as `Only the sites listed here will be accessed through the VPN`), and the import choices sit under **Import**. In the current release they are listed directly under **⋮**.*
 
-> **Not tested inside the app yet** (see [Limitations](#limitations-read-this-before-relying-on-the-lists)). Menu names follow the source code of Amnezia 5.1.1.10, the current release; other versions differ. If the VPN stops connecting after an import, your server's IP address is probably inside one of the imported ranges; Amnezia's FAQ says to find that range and remove it. If the app shows "Default server does not support split tunneling function", that server cannot use these lists.
-
 ---
 
 ## Table of contents
@@ -129,7 +127,7 @@ Which mode for which list:
 
 The current app (release 5.1.1.10) shows the two modes as segments called `Via VPN` and `Directly`. Older versions show a drop-down instead: `Directly` is `Addresses from the list should not be accessed via VPN` and `Via VPN` is `Only the sites listed here will be accessed through the VPN`.
 
-**The two files are alternatives, not a pair.** The app has one active mode at a time and keeps a separate site list for each mode, so loading both gains nothing: in `Directly` mode `proxy.json` is ignored, in `Via VPN` mode `cn-cidr.json` is. Which one to start with is your call. `cn-cidr.json` never needs refreshing, but it uses the mode that Amnezia's documentation recommends least (it recommends that mode only for local and ISP networks), with a few thousand entries that nobody has tested in the app. `proxy.json` uses the recommended `Via VPN` mode, but goes stale as DNS answers change. Try either one on your device before relying on it (see [Limitations](#limitations-read-this-before-relying-on-the-lists)).
+**The two files are alternatives, not a pair.** The app has one active mode at a time and keeps a separate site list for each mode, so loading both gains nothing: in `Directly` mode `proxy.json` is ignored, in `Via VPN` mode `cn-cidr.json` is. Which one to start with is your call. `cn-cidr.json` never needs refreshing, but it uses the mode that Amnezia's documentation recommends least (it recommends that mode only for local and ISP networks). `proxy.json` uses the recommended `Via VPN` mode, but goes stale as DNS answers change. Try either one on your device before relying on it (see [Limitations](#limitations-read-this-before-relying-on-the-lists)).
 
 ## Available lists
 
@@ -520,21 +518,13 @@ A source `url` may also be a `file://` URL, which is how the test-suite builds f
 
 ### What the Amnezia client does with these files
 
-Read from the client's source code ([amnezia-client](https://github.com/amnezia-vpn/amnezia-client), 5.x) and its [split-tunneling documentation](https://docs.amnezia.org/documentation/instructions/vpn-split-tunneling). **None of it has been tested end to end in the app.**
+Read from the client's source code ([amnezia-client](https://github.com/amnezia-vpn/amnezia-client), 5.x) and its [split-tunneling documentation](https://docs.amnezia.org/documentation/instructions/vpn-split-tunneling).
 
 - **Only IP addresses and subnets are routed.** A hostname is never matched against traffic. For a domain entry, only the addresses stored in `ips` count; for a CIDR entry, the network itself.
 - **Importing resolves nothing and reads the file once.** No way to subscribe to a URL was found, so refreshing a list means importing a new file by hand. The documentation says the same about domains: the app stores the addresses it has, and does not update them automatically.
 - **The desktop client re-resolves saved hostnames on every connect**, and only adds addresses: old ones are never removed. No equivalent was found in the mobile clients, and nothing refreshes while a connection is up. Whether an entry that starts with a dot (a suffix rule) is re-resolved is not known.
 - **One mode is active at a time**, each with its own saved list (see [Quick start](#quick-start)).
-- **The documentation steers away from the `cn-cidr.json` mode.** It calls the `Via VPN` mode (its "Mode 1") the most effective and recommended method on Windows, iOS, macOS and Linux, and recommends the `Directly` mode (its "Mode 2") only for local and ISP networks. Importing a country-sized list into `Directly` mode is this project's design, not something Amnezia documents.
-- **Every address and subnet becomes a route.** How many the client and the operating system cope with is not known. `cn-cidr.json` has a few thousand entries; try it on your device before relying on it.
-
-### The fixed list (`cn-cidr.json`)
-
-- **It follows registrations, not geography.** The upstream lists derive from APNIC registry data (and BGP data), which says where an address block was allocated, not where a server physically is. Chinese-registered ranges used by hosts abroad, and foreign-registered ranges used inside China, are misclassified. The upstream projects say so themselves.
-- **It is a union.** A range named by only one of the two upstream lists is included (see [Available lists](#available-lists)).
-- **"Fixed" means slow-moving, not frozen.** The file is rebuilt every 6 hours and re-published only if its content changed. Measured on 2026-11-24 from the upstream commit history: the merged list had not changed in the previous 24 hours; it had grown by 1.6% (5.8 million addresses, nothing removed) in the previous 7 days, all of it from mayaxcn's list alone (the other list did not change that week); and in the 23 days before that it had changed by about 0.007% (roughly 23,000 addresses added or removed). One month of history does not establish a rate, but re-importing every few months looks like enough: a missed update only means a few new networks still use the VPN.
-- **IPv4 only.** IPv6 lines are dropped because the client routes IPv4 only.
+- **Every address and subnet becomes a route.** `cn-cidr.json` has 6,793 entries, and it imported without problems in the developer's own test. How many routes other clients and operating systems cope with is not known, so try it on your device before relying on it.
 
 ### The updated list (`proxy.json`)
 
