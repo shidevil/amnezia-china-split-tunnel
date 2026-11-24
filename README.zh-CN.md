@@ -4,7 +4,7 @@
 
 **自动更新的 [AmneziaVPN](https://amnezia.org) IPv4 分流列表：一份固定的中国大陆网段列表，一份持续刷新的“中国大陆以外需要走 VPN 的网站”列表。**
 
-由 GitHub Actions 每 6 小时刷新（UTC 00:00、06:00、12:00、18:00）· 以 GitHub Release 资产发布 · 无需自建服务器
+由 GitHub Actions 每 6 小时刷新（UTC 00:17、06:17、12:17、18:17）· 以 GitHub Release 资产发布 · 无需自建服务器
 
 [![Build](https://github.com/shidevil/amnezia-china-split-tunnel/actions/workflows/build.yml/badge.svg)](https://github.com/shidevil/amnezia-china-split-tunnel/actions/workflows/build.yml)
 [![CI](https://github.com/shidevil/amnezia-china-split-tunnel/actions/workflows/ci.yml/badge.svg)](https://github.com/shidevil/amnezia-china-split-tunnel/actions/workflows/ci.yml)
@@ -74,7 +74,7 @@ AmneziaVPN 的分流功能路由的是 **IP 地址和子网**。它从不按域�
 | **Amnezia 模式** | `Directly`：中国大陆流量留在 VPN 之外 | 只能用 `Via VPN`：绝不要导入 `Directly` 模式 |
 | **在 App 内会过期吗？** | 几乎不会：地址分配变化很慢 | 会：DNS 应答会变，需要时不时重新导入 |
 
-GitHub Actions 工作流每 6 小时（UTC 00:00、06:00、12:00、18:00，即北京时间 08:00、14:00、20:00、02:00）执行一次：
+GitHub Actions 工作流每 6 小时（UTC 00:17、06:17、12:17、18:17，即北京时间 08:17、14:17、20:17、02:17）执行一次：
 
 1. 拉取上游列表，每个都固定到同一个上游 commit，
 2. 解析并规范化规则，
@@ -374,7 +374,7 @@ validation:           # 所有域名数据源的默认值
 
 | | |
 |---|---|
-| **定时** | `0 */6 * * *`（**UTC** 时间 00:00、06:00、12:00、18:00）。GitHub 在负载高时可能延迟定时任务，请把 6 小时视为刷新间隔而非保证。 |
+| **定时** | `17 */6 * * *`（**UTC** 时间 00:17、06:17、12:17、18:17）。GitHub 在负载高时可能延迟定时任务，请把 6 小时视为刷新间隔而非保证。 |
 | **手动运行** | *Actions → Build Amnezia lists → Run workflow* |
 | **手动参数** | `source`：`all` 或逗号分隔的列表，如 `cn-cidr,proxy`（单数据源构建需要已存在的发布，请先完整构建一次）；`force`：即使没有变化也发布 |
 | **发布** | 唯一一个滚动更新的 Release，标签为 `latest`。每次构建成功后就地替换资产，并且只替换内容有变化的资产。 |

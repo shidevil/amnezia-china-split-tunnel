@@ -28,11 +28,20 @@ def test_workflow_files_exist():
 
 def test_build_runs_every_six_hours_and_can_be_started_manually():
     on = triggers(load("build.yml"))
-    assert on["schedule"] == [{"cron": "0 */6 * * *"}]
+    assert on["schedule"] == [{"cron": "17 */6 * * *"}]
     inputs = on["workflow_dispatch"]["inputs"]
     assert set(inputs) == {"source", "force"}
     assert inputs["source"]["default"] == "all"
     assert inputs["force"]["type"] == "boolean"
+
+
+def test_the_schedule_avoids_the_top_of_the_hour():
+    # GitHub documents that scheduled runs are delayed at the start of every hour and may be
+    # dropped under load, and its advice is to run at a different time of the hour. A dropped
+    # run leaves no failure behind, so the schedule would just silently never fire.
+    cron = triggers(load("build.yml"))["schedule"][0]["cron"]
+    minute = cron.split()[0]
+    assert minute.isdigit() and int(minute) != 0, cron
 
 
 @pytest.mark.parametrize("path", FILES, ids=lambda p: p.name)

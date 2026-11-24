@@ -60,6 +60,21 @@ def test_relative_links_point_at_files_that_exist(readme):
 
 
 @pytest.mark.parametrize("readme", [EN, ZH], ids=["en", "zh-CN"])
+def test_readmes_state_the_cron_and_run_times_that_the_workflow_really_has(readme):
+    import yaml
+
+    workflow = yaml.safe_load((ROOT / ".github" / "workflows" / "build.yml").read_text("utf-8"))
+    cron = workflow.get("on", workflow.get(True))["schedule"][0]["cron"]
+    minute, hours = cron.split()[:2]
+    times = [
+        f"{hour:02d}:{int(minute):02d}" for hour in range(0, 24, int(hours.removeprefix("*/")))
+    ]
+    assert f"`{cron}`" in readme
+    for time in times:
+        assert time in readme, f"the README does not say that it runs at {time} UTC"
+
+
+@pytest.mark.parametrize("readme", [EN, ZH], ids=["en", "zh-CN"])
 def test_every_documented_download_name_is_a_real_source_or_build_info(readme):
     from src.config import load_config
 
