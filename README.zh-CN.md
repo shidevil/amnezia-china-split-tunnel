@@ -8,7 +8,7 @@
 
 [![Build](https://github.com/shidevil/amnezia-china-split-tunnel/actions/workflows/build.yml/badge.svg)](https://github.com/shidevil/amnezia-china-split-tunnel/actions/workflows/build.yml)
 [![CI](https://github.com/shidevil/amnezia-china-split-tunnel/actions/workflows/ci.yml/badge.svg)](https://github.com/shidevil/amnezia-china-split-tunnel/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/github/v/release/shidevil/amnezia-china-split-tunnel?label=release&sort=date)](https://github.com/shidevil/amnezia-china-split-tunnel/releases/latest)
+[![Release](https://img.shields.io/badge/download-latest_release-blue.svg)](https://github.com/shidevil/amnezia-china-split-tunnel/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Python 3.12](https://img.shields.io/badge/python-3.12-3776AB.svg)
 
