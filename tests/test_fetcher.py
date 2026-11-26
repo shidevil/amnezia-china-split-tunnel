@@ -322,6 +322,25 @@ def test_a_failing_source_fails_the_whole_fetch(tmp_path):
         )
 
 
+def test_a_caller_that_collects_failures_gets_every_other_source_and_no_half_source(tmp_path):
+    good = tmp_path / "good.txt"
+    good.write_bytes(b"example.com\n")
+    missing = tmp_path / "missing.txt"
+    failures: dict[str, str] = {}
+    fetched = fetch_all(
+        [
+            source("merged", urls=[good.as_uri(), missing.as_uri()]),
+            source("good", good.as_uri()),
+        ],
+        CFG,
+        token=None,
+        failures=failures,
+    )
+    assert list(fetched) == ["good"]  # the half that did download must not pass for "merged"
+    assert list(failures) == ["merged"]
+    assert "missing.txt" in failures["merged"]
+
+
 # ---- a source made of several URLs ----------------------------------------------------
 
 

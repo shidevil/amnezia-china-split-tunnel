@@ -127,16 +127,16 @@ jobs:
           path: staging
 
       # Every release must hold every list, or `releases/latest/download/<list>` would stop
-      # working the moment this release becomes the latest. The build only stages what
-      # changed, so the other lists are taken from the release users get today.
+      # working the moment this release becomes the latest. The build only stages what it
+      # rebuilt and found changed, so the other lists come from the release users get today.
       - name: Complete the asset set
         run: |
           jq -r '.sources[].file' staging/build-info.json > expected.txt
           while read -r name; do
             [ -f "staging/$name" ] && continue
-            echo "$name did not change: taking it from the latest release"
+            echo "$name has no new file: taking it from the latest release"
             gh release download --pattern "$name" --dir staging || {
-              echo "::error::$name was not rebuilt and is not on the latest release. Run this workflow with source=all and force=true."
+              echo "::error::$name was not rebuilt and is not on the latest release. Run this workflow with source=all and force=true. If the build says its upstream is broken, fix or remove that URL in config.yaml first."
               exit 1
             }
           done < expected.txt
@@ -157,7 +157,7 @@ jobs:
             if [ "${got%% *}" = "$want" ]; then
               echo "ok  $name"
             else
-              echo "::error::$name does not match the hash in build-info.json. Run this workflow with source=all and force=true to rebuild it."
+              echo "::error::$name does not match the hash in build-info.json. Run this workflow with source=all and force=true to rebuild it. If the build says its upstream is broken, fix or remove that URL in config.yaml first."
               problems=1
             fi
           done < expected.txt

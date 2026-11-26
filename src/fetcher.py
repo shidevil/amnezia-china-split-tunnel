@@ -182,8 +182,14 @@ def fetch_all(
     *,
     opener: Opener = urllib.request.urlopen,
     sleep: Callable[[float], None] = time.sleep,
+    failures: dict[str, str] | None = None,
 ) -> dict[str, list[FetchedSource]]:
-    """Download every URL of every source: ``{source name: [one document per URL, in order]}``."""
+    """Download every URL of every source: ``{source name: [one document per URL, in order]}``.
+
+    A source with a URL that cannot be downloaded raises ``FetchError``. A caller that passes
+    ``failures`` gets that source recorded there instead (name -> reason) and left out of the
+    result entirely, and the other sources are still fetched.
+    """
     refs = {url: parse_github_raw_url(url) for source in sources for url in source.urls}
 
     revisions: dict[tuple[str, str], str | None] = {}
@@ -195,40 +201,46 @@ def fetch_all(
 
     fetched: dict[str, list[FetchedSource]] = {}
     for source in sources:
-        documents: list[FetchedSource] = []
-        for source_url in source.urls:
-            ref = refs[source_url]
-            revision = revisions[(ref.repository, ref.ref)] if ref else None
-            url = ref.pinned_url(revision) if ref and revision else source_url
-            body = http_get(
-                url,
-                timeout=cfg.timeout,
-                retries=cfg.retries,
-                max_bytes=cfg.max_bytes,
-                opener=opener,
-                sleep=sleep,
-            )
-            try:
-                text = body.decode("utf-8")
-            except UnicodeDecodeError as exc:
-                raise FetchError(f"{source.name}: {url} is not valid UTF-8") from exc
-            documents.append(
-                FetchedSource(
-                    name=source.name,
-                    url=source_url,
-                    text=text,
-                    sha256=hashlib.sha256(body).hexdigest(),
-                    repository=ref.repository if ref else None,
-                    branch=ref.ref if ref else None,
-                    revision=revision,
+        try:
+            documents: list[FetchedSource] = []
+            for source_url in source.urls:
+                ref = refs[source_url]
+                revision = revisions[(ref.repository, ref.ref)] if ref else None
+                url = ref.pinned_url(revision) if ref and revision else source_url
+                body = http_get(
+                    url,
+                    timeout=cfg.timeout,
+                    retries=cfg.retries,
+                    max_bytes=cfg.max_bytes,
+                    opener=opener,
+                    sleep=sleep,
                 )
-            )
-            log.info(
-                "fetched %s: %s, %d bytes (revision %s)",
-                source.name,
-                source_url,
-                len(body),
-                revision or "n/a",
-            )
-        fetched[source.name] = documents
+                try:
+                    text = body.decode("utf-8")
+                except UnicodeDecodeError as exc:
+                    raise FetchError(f"{source.name}: {url} is not valid UTF-8") from exc
+                documents.append(
+                    FetchedSource(
+                        name=source.name,
+                        url=source_url,
+                        text=text,
+                        sha256=hashlib.sha256(body).hexdigest(),
+                        repository=ref.repository if ref else None,
+                        branch=ref.ref if ref else None,
+                        revision=revision,
+                    )
+                )
+                log.info(
+                    "fetched %s: %s, %d bytes (revision %s)",
+                    source.name,
+                    source_url,
+                    len(body),
+                    revision or "n/a",
+                )
+        except FetchError as exc:
+            if failures is None:
+                raise
+            failures[source.name] = str(exc)
+        else:
+            fetched[source.name] = documents
     return fetched

@@ -3,7 +3,11 @@
 Exit codes: 0 success (including "nothing changed"), 1 quality gate/validation failed,
 2 configuration, download or parsing problem, 130 interrupted.
 
-Nothing is written to the output directory unless *every* selected source passes
+A source that cannot be downloaded or parsed is left out of the build and keeps the file
+of the previous release, with a warning. The build fails (2) if there is no such file to
+keep, or if no selected source is left to build.
+
+Nothing is written to the output directory unless *every* source that was built passes
 validation, so a bad build can never produce a half-updated release.
 """
 
@@ -21,7 +25,7 @@ from datetime import UTC, datetime
 from pathlib import Path
 
 from .config import BUILD_INFO_FILENAME, Config, ConfigError, enabled_sources, load_config
-from .fetcher import FetchError, fetch_all
+from .fetcher import fetch_all
 from .generator import BuiltSource, build_cidr_source, build_source, dumps_entries, sha256_text
 from .parser import (
     CidrParseResult,
@@ -62,6 +66,21 @@ def _load_previous(path: Path | None) -> dict | None:
         log.warning("ignoring unreadable previous build-info (%s): publishing everything", exc)
         return None
     return data if isinstance(data, dict) else None
+
+
+def _released_record(previous: dict | None, name: str, filename: str) -> dict | None:
+    """The previous release's record of a list, if it describes a file that can be kept."""
+    sources = previous.get("sources") if previous else None
+    record = sources.get(name) if isinstance(sources, dict) else None
+    if not isinstance(record, dict):
+        return None
+    return record if record.get("file") == filename and record.get("output_sha256") else None
+
+
+def _warn(message: str) -> None:
+    """Print a GitHub Actions warning annotation: a run that stays green must still say it."""
+    escaped = message.replace("%", "%25").replace("\r", "%0D").replace("\n", "%0A")
+    print(f"::warning::{escaped}", flush=True)
 
 
 def _write_outputs(
@@ -125,15 +144,47 @@ def run_build(  # noqa: PLR0913 - an orchestrator; each argument is an independe
     # 1. fetch and parse -------------------------------------------------------------
     try:
         selected = enabled_sources(config, only)
-        fetched = fetch(selected, config.fetch, token)
-        parsed: dict[str, ParseResult | CidrParseResult] = {}
-        for source in selected:
-            parts = [(document.url, document.text) for document in fetched[source.name]]
-            parse = parse_cidr_parts if source.kind == "cidr" else parse_domain_parts
-            parsed[source.name] = parse(source.name, parts)
-    except (ConfigError, FetchError, EmptySourceError) as exc:
+    except ConfigError as exc:
         log.error("%s", exc)
         return fail(2, [str(exc)])
+    unavailable: dict[str, str] = {}  # source name -> why it cannot be downloaded or parsed
+    fetched = fetch(selected, config.fetch, token, failures=unavailable)
+    parsed: dict[str, ParseResult | CidrParseResult] = {}
+    for source in selected:
+        if source.name in unavailable:
+            continue
+        parts = [(document.url, document.text) for document in fetched[source.name]]
+        parse = parse_cidr_parts if source.kind == "cidr" else parse_domain_parts
+        try:
+            parsed[source.name] = parse(source.name, parts)
+        except EmptySourceError as exc:
+            unavailable[source.name] = str(exc)
+
+    # One dead upstream must not stop the other lists: a list that cannot be built keeps the
+    # previous release's file. That takes a released file, and something left to build.
+    for reason in unavailable.values():
+        log.error("%s", reason)
+    kept = {
+        name: record
+        for name in unavailable
+        if (record := _released_record(previous, name, config.sources[name].filename))
+    }
+    if len(kept) < len(unavailable) or not parsed:
+        missing = [
+            f"{name}: there is no previously released file to keep"
+            for name in unavailable
+            if name not in kept
+        ]
+        if not parsed:
+            missing.append("no selected list could be built, so there is nothing new to publish")
+        return fail(2, [*unavailable.values(), *missing])
+    kept_notes: list[str] = []
+    for name, record in kept.items():
+        built_at = record.get("generated_at", "at an unknown time")
+        note = f"{record['file']} (built {built_at}) was kept: {unavailable[name]}"
+        kept_notes.append(note)
+        _warn(f"{name} was not rebuilt. {note}")
+    selected = [source for source in selected if source.name in parsed]
     for name, result in parsed.items():
         for line_no, text, reason in result.invalid[:5]:
             log.warning("%s line %d ignored (%s): %r", name, line_no, reason, text)
@@ -263,7 +314,7 @@ def run_build(  # noqa: PLR0913 - an orchestrator; each argument is an independe
 
     (reports_dir / "release-notes.md").write_text(release_notes(info, repository), encoding="utf-8")
     result = BuildResult(exit_code=0, published=bool(changed), changed=changed)
-    summary = summary_markdown(info, [], published=result.published)
+    summary = summary_markdown(info, [], published=result.published, kept=kept_notes)
     return _write_outputs(github_output, step_summary, reports_dir, result, summary)
 
 

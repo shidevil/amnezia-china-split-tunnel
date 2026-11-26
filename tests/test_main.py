@@ -631,3 +631,155 @@ def test_a_single_source_rebuild_merges_into_a_previous_build_info_of_the_old_sc
     info = load(tmp_path, "build-info.json")
     assert set(info["sources"]) == {"cn-cidr", "proxy"}
     assert info["sources"]["proxy"]["rules"] == 3  # carried over untouched
+
+
+# ---- a list whose upstream is gone keeps its released file --------------------------
+
+
+def released_two_lists(tmp_path):
+    """A first release of cn-cidr and proxy, built from upstream files a test can break."""
+    upstreams = {
+        "cn-a.txt": "small-cn-plain.txt",
+        "cn-b.txt": "small-cn-qx.txt",
+        "proxy.txt": "small-proxy.txt",
+    }
+    files = {}
+    for name, fixture in upstreams.items():
+        files[name] = tmp_path / name
+        files[name].write_bytes((FIXTURES / fixture).read_bytes())
+    path = tmp_path / "config.yaml"
+    path.write_text(
+        "sources:\n"
+        "  cn-cidr:\n    kind: cidr\n    min_entries: 3\n"
+        f"    url: [{files['cn-a.txt'].as_uri()}, {files['cn-b.txt'].as_uri()}]\n"
+        f"  proxy:\n    url: {files['proxy.txt'].as_uri()}\n    min_resolved_rate: 0.1\n"
+        "dns:\n  retries: 1\n  max_qps: 0\n",
+        encoding="utf-8",
+    )
+    config = load_config(path)
+    assert build(tmp_path, config).exit_code == 0
+    previous = tmp_path / "previous.json"
+    previous.write_bytes((tmp_path / "dist" / "build-info.json").read_bytes())
+    (tmp_path / "github_output").unlink()
+    (tmp_path / "step_summary.md").unlink()
+    return config, previous, files
+
+
+def moved_dns(name, nameserver, attempt):
+    """foo.org has a new address since the first release, so proxy.json has news."""
+    if name == "foo.org":
+        return a_response(name, "4.4.4.4")
+    return dns_handler(name, nameserver, attempt)
+
+
+def serve_junk(path):
+    path.write_text("<html>moved</html>\n", encoding="utf-8")
+
+
+def staged(tmp_path):
+    return sorted(p.name for p in (tmp_path / "dist").iterdir())
+
+
+@pytest.mark.parametrize("break_upstream", [Path.unlink, serve_junk], ids=["gone", "junk"])
+def test_a_list_with_a_broken_upstream_keeps_its_released_file_while_the_others_publish(
+    tmp_path, break_upstream
+):
+    config, previous, files = released_two_lists(tmp_path)
+    break_upstream(files["cn-b.txt"])
+
+    result = build(tmp_path, config, handler=moved_dns, previous_build_info=previous)
+
+    assert result.exit_code == 0
+    assert result.changed == ["proxy"]
+    assert outputs(tmp_path)["publish"] == "true"
+    # cn-cidr.json is not staged, so the publish job takes it from the release users have...
+    assert staged(tmp_path) == ["build-info.json", "proxy.json"]
+    # ...and checks it against this record, which must therefore be the released one.
+    released = json.loads(previous.read_text(encoding="utf-8"))["sources"]["cn-cidr"]
+    assert load(tmp_path, "build-info.json")["sources"]["cn-cidr"] == released
+
+
+def test_a_kept_list_is_flagged_even_when_the_run_publishes_nothing(tmp_path, capsys):
+    # The run stays green, so without this a dead upstream would look like "nothing changed".
+    config, previous, files = released_two_lists(tmp_path)
+    files["cn-b.txt"].unlink()
+    capsys.readouterr()
+
+    result = build(tmp_path, config, previous_build_info=previous)
+
+    assert result.exit_code == 0
+    assert outputs(tmp_path)["publish"] == "false"
+    printed = capsys.readouterr().out.splitlines()
+    (warning,) = [line for line in printed if line.startswith("::warning::")]
+    assert "cn-cidr.json" in warning and "cn-b.txt" in warning
+    summary = (tmp_path / "step_summary.md").read_text(encoding="utf-8")
+    assert "Not rebuilt" in summary
+    assert "cn-cidr.json" in summary and "cn-b.txt" in summary
+
+
+def test_a_healthy_build_prints_no_warning(tmp_path, capsys):
+    config, previous, _ = released_two_lists(tmp_path)
+    capsys.readouterr()
+    assert build(tmp_path, config, previous_build_info=previous).exit_code == 0
+    assert "::warning::" not in capsys.readouterr().out
+    assert "Not rebuilt" not in (tmp_path / "step_summary.md").read_text(encoding="utf-8")
+
+
+@pytest.mark.parametrize(
+    "damage",
+    [
+        None,
+        lambda sources: sources.pop("cn-cidr"),
+        lambda sources: sources["cn-cidr"].pop("output_sha256"),
+        lambda sources: sources["cn-cidr"].pop("file"),
+    ],
+    ids=["no previous release", "list not in it", "no hash recorded", "no file recorded"],
+)
+def test_a_broken_upstream_with_no_released_file_to_keep_fails_the_build(tmp_path, damage):
+    # Publishing without it would make releases/latest/download/cn-cidr.json a 404.
+    config, previous, files = released_two_lists(tmp_path)
+    files["cn-b.txt"].unlink()
+    if damage is None:
+        previous = None
+    else:
+        info = json.loads(previous.read_text(encoding="utf-8"))
+        damage(info["sources"])
+        previous.write_text(json.dumps(info), encoding="utf-8")
+
+    result = build(tmp_path, config, handler=moved_dns, previous_build_info=previous)
+
+    assert result.exit_code == 2
+    assert outputs(tmp_path)["publish"] == "false"
+    assert staged(tmp_path) == []
+    assert any("cn-b.txt" in problem for problem in result.problems)
+
+
+@pytest.mark.parametrize("only", [None, ["cn-cidr"]], ids=["all broken", "only the broken one"])
+def test_the_build_fails_when_no_selected_list_can_be_built(tmp_path, only):
+    config, previous, files = released_two_lists(tmp_path)
+    files["cn-b.txt"].unlink()
+    if only is None:
+        files["proxy.txt"].unlink()
+
+    result = build(tmp_path, config, only=only, previous_build_info=previous)
+
+    assert result.exit_code == 2
+    assert outputs(tmp_path)["publish"] == "false"
+    assert any("cn-b.txt" in problem for problem in result.problems)
+    # Every broken list here has a file to keep, so the summary must give the real reason.
+    assert any("no selected list could be built" in problem for problem in result.problems)
+
+
+def test_a_quality_gate_still_blocks_everything_while_another_list_is_being_kept(tmp_path):
+    # Only download and parsing failures are isolated; a list that builds badly is not.
+    config, previous, files = released_two_lists(tmp_path)
+    files["cn-b.txt"].unlink()
+
+    def handler(name, nameserver, attempt):
+        return dns.exception.Timeout()
+
+    result = build(tmp_path, config, handler=handler, previous_build_info=previous)
+
+    assert result.exit_code == 1
+    assert outputs(tmp_path)["publish"] == "false"
+    assert staged(tmp_path) == []

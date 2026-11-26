@@ -202,7 +202,13 @@ def release_notes(info: dict[str, Any], repository: str | None) -> str:
     return "\n".join(lines) + "\n"
 
 
-def summary_markdown(info: dict[str, Any] | None, problems: list[str], *, published: bool) -> str:
+def summary_markdown(
+    info: dict[str, Any] | None,
+    problems: list[str],
+    *,
+    published: bool,
+    kept: Sequence[str] = (),
+) -> str:
     if problems:
         lines = ["## Build failed: nothing was published", ""]
         lines += [f"- {problem}" for problem in problems]
@@ -210,7 +216,11 @@ def summary_markdown(info: dict[str, Any] | None, problems: list[str], *, publis
         return "\n".join(lines) + "\n"
     assert info is not None  # noqa: S101 - callers pass info whenever there are no problems
     status = "A new release will be published." if published else "No changes: release not updated."
-    lines = ["## Build succeeded", "", status, "", *_table(info, None), ""]
+    lines = ["## Build succeeded", "", status, ""]
+    if kept:
+        lines += ["### Not rebuilt: the previous file was kept", ""]
+        lines += [*(f"- {note}" for note in kept), ""]
+    lines += [*_table(info, None), ""]
     totals = info["totals"]
     if any(_kind(rec) == "domains" for rec in info["sources"].values()):
         lines.append(
