@@ -1,0 +1,53 @@
+name: Retry a failed build
+
+# A build that fails is run again on a fresh runner, up to three attempts in all. A runner
+# whose DNS lookups mostly time out is the case this is for: another one usually does not.
+on:
+  workflow_run:
+    workflows: [Build Amnezia lists] # the `name:` in build.yml
+    types: [completed]
+    branches: [main] # the branch the build ran on
+
+# Deny everything by default; the job below asks for exactly what it needs.
+permissions: {}
+
+defaults:
+  run:
+    shell: bash
+
+jobs:
+  retry:
+    name: Run the failed build again
+    # `run_attempt` is the attempt that just ended, so `< 3` allows two re-runs.
+    if: >-
+      github.event.workflow_run.conclusion == 'failure' &&
+      github.event.workflow_run.event == 'workflow_dispatch' &&
+      github.event.workflow_run.run_attempt < 3
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    permissions:
+      actions: write # list the build's runs, and re-run one
+      contents: read # find the commit main is at
+    steps:
+      # A re-run uses the old commit and inputs. Once main has moved on or a newer build
+      # exists, running this one again could publish lists made the old way as the latest
+      # release. Every job is run again, not only the failed ones, so a publish never reuses
+      # the earlier attempt's files.
+      - name: Run it again unless it is out of date
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          RUN_ID: ${{ github.event.workflow_run.id }}
+          RUN_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          tip=$(gh api "repos/$GH_REPO/commits/main" --jq .sha)
+          if [ "$tip" != "$RUN_SHA" ]; then
+            echo "main has moved on from $RUN_SHA to $tip: not running the old commit again"
+            exit 0
+          fi
+          newest=$(gh run list --workflow build.yml --branch main --limit 1 --json databaseId --jq '.[0].databaseId')
+          if [ "$newest" != "$RUN_ID" ]; then
+            echo "run $newest is newer than $RUN_ID: not running the old one again"
+            exit 0
+          fi
+          gh run rerun "$RUN_ID"

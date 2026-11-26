@@ -46,7 +46,7 @@ def test_build_is_only_started_through_workflow_dispatch():
 @pytest.mark.parametrize("path", FILES, ids=lambda p: p.name)
 def test_every_action_is_pinned_to_a_full_commit_sha(path):
     uses = re.findall(r"uses:\s*(\S+)", path.read_text(encoding="utf-8"))
-    assert uses
+    assert uses or path.name == "retry.yml"  # that one only runs the gh CLI
     for reference in uses:
         assert re.search(r"@[0-9a-f]{40}$", reference), f"{reference} is not pinned to a SHA"
 
@@ -150,10 +150,11 @@ def test_enough_releases_are_kept_to_roll_back_to():
     assert keep >= 2  # the new release and at least one to go back to
 
 
-def test_user_controlled_inputs_never_appear_inside_shell_scripts():
+@pytest.mark.parametrize("name", ["build.yml", "retry.yml"])
+def test_user_controlled_inputs_never_appear_inside_shell_scripts(name):
     # `${{ inputs.* }}` inside a run: block is a script-injection vector. Inputs must
     # be passed through env: and referenced as shell variables.
-    for job in load("build.yml")["jobs"].values():
+    for job in load(name)["jobs"].values():
         for step in job["steps"]:
             assert "${{" not in step.get("run", ""), step.get("name", step)
 
@@ -200,7 +201,60 @@ def test_a_run_with_nothing_to_publish_never_stages_or_uploads_assets():
     assert any(s.get("id") == "build" for s in steps)  # the output the conditions read
 
 
-def test_steps_run_under_bash_with_errexit_and_pipefail():
+@pytest.mark.parametrize("name", ["build.yml", "retry.yml"])
+def test_steps_run_under_bash_with_errexit_and_pipefail(name):
     # Without an explicit shell GitHub uses `bash -e` (no pipefail); the script tests
     # assume `bash -eo pipefail`, so the workflow must request it.
-    assert load("build.yml")["defaults"]["run"]["shell"] == "bash"
+    assert load(name)["defaults"]["run"]["shell"] == "bash"
+
+
+def test_the_retry_listens_for_the_build_by_the_name_it_goes_by():
+    # `workflow_run` matches on the display name: renaming build.yml would silently switch
+    # the retry off.
+    assert triggers(load("retry.yml")) == {
+        "workflow_run": {
+            "workflows": [load("build.yml")["name"]],
+            "types": ["completed"],
+            "branches": ["main"],  # a build of any other branch is somebody's experiment
+        }
+    }
+
+
+def test_only_a_failed_build_is_retried_and_only_for_three_attempts_in_all():
+    # `run_attempt` is the attempt that just ended, so `< 3` allows two re-runs. It is the
+    # only thing that stops the retry from repeating. A cancelled run was stopped on purpose.
+    condition = " ".join(load("retry.yml")["jobs"]["retry"]["if"].split())
+    assert condition == (
+        "github.event.workflow_run.conclusion == 'failure' "
+        "&& github.event.workflow_run.event == 'workflow_dispatch' "
+        "&& github.event.workflow_run.run_attempt < 3"
+    )
+
+
+def test_the_retry_may_manage_runs_and_read_the_repository_and_nothing_else():
+    workflow = load("retry.yml")
+    assert workflow["permissions"] == {}
+    assert set(workflow["jobs"]) == {"retry"}
+    assert workflow["jobs"]["retry"]["permissions"] == {"actions": "write", "contents": "read"}
+
+
+def test_a_second_attempt_does_not_trip_over_what_the_first_one_uploaded():
+    # A re-run is the same workflow run, and uploading an artifact name that the run already
+    # holds fails the job: every retry of a build would fail.
+    uploads = {
+        step["name"]: step["with"]
+        for job in load("build.yml")["jobs"].values()
+        for step in job["steps"]
+        if "upload-artifact" in step.get("uses", "")
+    }
+    assert set(uploads) == {
+        "Upload release assets for the publish job",
+        "Upload failure reports",
+    }
+    # The publish job downloads this one by name, so the newer upload replaces the older.
+    assets = uploads["Upload release assets for the publish job"]
+    assert assets["name"] == "release-assets"
+    assert assets["overwrite"] is True
+    # Each attempt keeps its own reports: they say why the earlier one failed.
+    reports = uploads["Upload failure reports"]
+    assert reports["name"] == "build-reports-${{ github.run_attempt }}"

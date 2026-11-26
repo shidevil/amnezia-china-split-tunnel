@@ -68,7 +68,7 @@ while [ $# -gt 0 ]; do
     --jq) jq_expr="$2"; shift ;;
     --dir) dir="$2"; shift ;;
     --pattern) pattern="$2"; shift ;;
-    --limit|--title|--notes-file|--target) shift ;;
+    --limit|--title|--notes-file|--target|--workflow|--branch) shift ;;
     --draft) draft=1 ;;
     --draft=false) draft=0 ;;
     --latest) latest=1 ;;
@@ -164,6 +164,14 @@ case "$group" in
     [[ " ${FAIL_DELETE:-} " == *" $tag "* ]] && { echo "HTTP 500" >&2; exit 1; }
     rm -rf "${R:?}/$tag"
     [ "$(latest_tag)" = "$tag" ] && rm -f "$SIM_REPO/latest"
+    ;;
+  "run list")
+    [ "${FAIL_RUN_LIST:-0}" = 1 ] && { echo "HTTP 502" >&2; exit 1; }
+    printf '[{"databaseId": %s}]' "$NEWEST_RUN" | jq -r "${jq_expr:-.}"
+    ;;
+  "api repos/"*"/commits/main")
+    [ "${FAIL_MAIN_LOOKUP:-0}" = 1 ] && { echo "HTTP 502" >&2; exit 1; }
+    printf '{"sha": "%s"}' "$MAIN_SHA" | jq -r "${jq_expr:-.}"
     ;;
 esac
 exit 0
@@ -1058,3 +1066,65 @@ def test_the_source_input_is_never_interpreted_by_the_shell(tmp_path):
         f"python -m src.main --source direct; touch {canary} --require-previous "
         "--previous-build-info previous/build-info.json"
     ]
+
+
+# ---- retry: run a failed build again ----------------------------------------------------
+def retry_script():
+    workflow = yaml.safe_load(WORKFLOW.with_name("retry.yml").read_text(encoding="utf-8"))
+    return workflow["jobs"]["retry"]["steps"][0]["run"]
+
+
+# The failed run is the newest build, and main is still at its commit.
+CURRENT = {
+    "GH_REPO": "owner/repo",
+    "RUN_ID": "123",
+    "NEWEST_RUN": "123",
+    "RUN_SHA": "aaa111",
+    "MAIN_SHA": "aaa111",
+}
+
+
+def run_retry(tmp_path, **env):
+    done, calls, _ = run_script(tmp_path, retry_script(), env={**CURRENT, **env})
+    return done, calls
+
+
+def reruns(calls):
+    return [call for call in calls if call.startswith("gh run rerun")]
+
+
+def test_a_failed_build_is_run_again_from_the_beginning(tmp_path):
+    done, calls = run_retry(tmp_path)
+    assert done.returncode == 0, done.stderr
+    # Not `--failed`: after a publish failure that would publish the first attempt's files
+    # again, which are older by now.
+    assert reruns(calls) == ["gh run rerun 123"]
+    # "Newest" means the newest build of main: a run on another branch must not count.
+    assert (
+        "gh run list --workflow build.yml --branch main --limit 1 --json databaseId "
+        "--jq .[0].databaseId"
+    ) in calls
+
+
+def test_a_failed_build_is_left_alone_once_a_newer_one_exists(tmp_path):
+    # Running it after a newer build could put its lists back as the latest release.
+    done, calls = run_retry(tmp_path, NEWEST_RUN="124")
+    assert done.returncode == 0, done.stderr
+    assert reruns(calls) == []
+    assert "124 is newer" in done.stdout
+
+
+def test_a_failed_build_is_left_alone_once_main_has_moved_on(tmp_path):
+    # A re-run uses the old commit: it would publish lists made with the old configuration,
+    # for instance from an upstream that has just been removed.
+    done, calls = run_retry(tmp_path, MAIN_SHA="bbb222")
+    assert done.returncode == 0, done.stderr
+    assert reruns(calls) == []
+    assert "main has moved on" in done.stdout
+
+
+@pytest.mark.parametrize("lookup", ["FAIL_RUN_LIST", "FAIL_MAIN_LOOKUP"])
+def test_nothing_is_run_again_when_a_lookup_fails(tmp_path, lookup):
+    done, calls = run_retry(tmp_path, **{lookup: "1"})
+    assert done.returncode != 0
+    assert reruns(calls) == []

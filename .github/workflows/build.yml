@@ -98,12 +98,14 @@ jobs:
           path: release/
           if-no-files-found: error
           retention-days: 7
+          overwrite: true # a re-run may find the earlier attempt's upload still there
 
       - name: Upload failure reports
         if: always()
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
-          name: build-reports
+          # One per attempt: a taken name fails the upload, and each attempt's report is kept.
+          name: build-reports-${{ github.run_attempt }}
           path: reports/
           if-no-files-found: ignore
           retention-days: 14

@@ -393,6 +393,8 @@ The workflow has two jobs:
 
 Every run writes a summary (per-list counts, failures) to the job summary page, and uploads `reports/` (failure lists) as a build artifact.
 
+**If a build fails.** A second workflow, `retry.yml`, runs it again from the start on a fresh runner, up to three attempts in all. That is meant for passing faults, such as a runner whose DNS lookups mostly time out; a lasting one fails all three. The next attempt starts only after the failed one has ended. Only builds of `main` are retried. A re-run uses the same commit and inputs, so nothing is started if `main` has changed since or a newer build exists: that run of `retry.yml` then passes, and its log says why. Cancelled runs are left alone. A run that passes on a later attempt shows as passed, with the earlier attempts still listed on its page. Because `retry.yml` is notified whenever a build of `main` ends, the Actions list also shows a skipped run of it after builds that need no retry.
+
 **If a publish fails.** Users only ever see a release once it is complete. The publish job first takes the lists that have no new file (unchanged, or not rebuilt) from the latest release and checks every file against the SHA-256 recorded in `build-info.json`; a mismatch stops the run (run the workflow with `force` to rebuild every list; a list whose upstream is broken is not rebuilt even then, so fix or remove that URL first). It then creates the new release as a draft, uploads every asset (retrying up to three times), verifies the sizes, and only then publishes it and marks it *Latest* in a single call. If anything fails before that call, the draft is deleted and the previous release stays the latest, untouched. A published release is never modified, and a failure after that call leaves the new release in place: it is already what users download. Old releases are pruned last, and a failure to prune never fails the build.
 
 **Single-source and unchanged builds.** A manual run with `source=proxy` rebuilds only `proxy.json` and merges its record into the existing `build-info.json`, so the other lists and their metadata stay as they were. Lists whose generated content is byte-identical to the previous release are carried over from it as they are; for `cn-cidr.json` that is most runs.
@@ -432,7 +434,9 @@ timeout	.slow.example.cn	timeout from 8.8.8.8
 nxdomain	.gone.example	
 ```
 
-Download them from the run page: *Actions → the run → Artifacts → `build-reports`*.
+Download them from the run page: *Actions → the run → Artifacts → `build-reports-1`*. The number is the attempt: each attempt that got far enough to write reports has its own.
+
+A failed build is retried automatically (see [Automation and releases](#automation-and-releases)), so check the latest attempt before acting on the table below.
 
 | Symptom | Likely cause and fix |
 |---|---|
@@ -501,7 +505,8 @@ A source `url` may also be a `file://` URL, which is how the test-suite builds f
 .
 ├── .github/workflows/
 │   ├── build.yml         # manual / API-triggered: build, publish
-│   └── ci.yml            # lint + tests on push / pull request
+│   ├── ci.yml            # lint + tests on push / pull request
+│   └── retry.yml         # runs a failed build again
 ├── config.yaml           # sources, DNS settings, quality gates
 ├── src/
 │   ├── config.py         # load and strictly validate config.yaml
