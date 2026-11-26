@@ -83,14 +83,14 @@ GitHub Actions 工作流每 6 小时（UTC 00:41、06:41、12:41、18:41，即�
 5. 按严格的质量门槛进行校验，
 6. 只要有列表发生变化，就发布一个新的 GitHub Release。最新的发布始终是标记为 *Latest* 的那一个，因此下载链接永不改变。内容没有变化的列表会沿用上一个发布中的版本。
 
-只要构建过程中出现任何问题（DNS 故障、上游文件为空或被截断、质量门槛未通过），构建就会失败，**上一次的发布保持不变**。如果在新发布公开之前出现任何失败，该发布会被删除（它以草稿形式创建，无人可见），因此用户下载的仍是上一个发布（见[自动化与发布](#自动化与发布)）。
+如果构建过程中出现问题（DNS 故障、上游文件被截断、质量门槛未通过），构建就会失败，**上一次的发布保持不变**。上游无法下载或不含任何可用规则是例外：只有它自己的列表会暂停，并沿用旧文件。如果在新发布公开之前出现任何失败，该发布会被删除（它以草稿形式创建，无人可见），因此用户下载的仍是上一个发布（见[自动化与发布](#自动化与发布)）。
 
 ### 特性
 
 - **全自动**：每 6 小时构建一次，也可手动触发；构建在 GitHub Actions 上运行，不依赖你自己的机器。
 - **两份列表，用途不重叠**：一份不依赖 DNS 的固定列表，一份持续刷新的域名列表。
 - **保留后缀规则**：`.example.com` 与 `example.com` 是不同的规则，输出中也保持区分。
-- **设计上安全**：全部通过才发布、失败率门槛、每个上游的数量下限与合并后网段的规模上限、对写出的文件做 schema 校验，并且在 DNS 解析器不可达时快速中止。
+- **设计上安全**：质量门槛全部通过才发布（失败率、每个上游的数量下限与合并后网段的规模上限）、对写出的文件做 schema 校验、在 DNS 解析器不可达时快速中止；上游损坏的列表则沿用上一次发布的文件。
 - **只保留可用地址**：仅 IPv4；黑洞应答（`0.0.0.0`、`127.0.0.1`）、私有网段和短得离谱的前缀（短于 `/8`）都不会进入路由列表。
 - **输出确定**：顺序稳定，数据未变化时生成完全相同的文件，不会产生无意义的 Release 更新。
 - **配置驱动**：在 `config.yaml` 中新增、合并或停用数据源，无需改代码。
@@ -135,13 +135,15 @@ curl -fLO https://github.com/shidevil/amnezia-china-split-tunnel/releases/latest
 
 | 输出文件 | 类型 | 上游文件 | 内容 |
 |---|---|---|---|
-| `cn-cidr.json` | `cidr` | [mayaxcn/china-ip-list](https://github.com/mayaxcn/china-ip-list) 的 [`chnroute.txt`](https://raw.githubusercontent.com/mayaxcn/china-ip-list/master/chnroute.txt)，以及 [Xiaobei09/Rule-Provider](https://github.com/Xiaobei09/Rule-Provider) 的 [`CN.txt`](https://raw.githubusercontent.com/Xiaobei09/Rule-Provider/main/ruleset/geoip/QuantumultX/CN.txt) | 中国大陆 IPv4 网段。只要**任意一份**上游列出某个网段就保留（并集），然后合并。IPv6 行会被丢弃。 |
+| `cn-cidr.json` | `cidr` | [mayaxcn/china-ip-list](https://github.com/mayaxcn/china-ip-list) 的 [`chnroute.txt`](https://raw.githubusercontent.com/mayaxcn/china-ip-list/master/chnroute.txt)，以及 [gaoyifan/china-operator-ip](https://github.com/gaoyifan/china-operator-ip) 的 [`china.txt`](https://raw.githubusercontent.com/gaoyifan/china-operator-ip/ip-lists/china.txt) | 中国大陆 IPv4 网段。只要**任意一份**上游列出某个网段就保留（并集），然后合并。IPv6 行会被丢弃。 |
 | `proxy.json` | `domains` | [Loyalsoldier/surge-rules](https://github.com/Loyalsoldier/surge-rules/tree/release) `release` 分支的 `gfw.txt` 与 `proxy.txt` | 中国大陆以外需要走 VPN 的网站：两份文件中的域名，合并并去重，每个域名附带其当前的 IPv4 地址。只能导入 `Via VPN` 模式。 |
 | `build-info.json` | 无 | 无 | 构建元数据：时间戳、上游 commit、各列表统计与哈希 |
 
 关于 `proxy.json`：它不是“中国大陆以外所有地址”的列表，只包含 Loyalsoldier 的两份文件认为需要走 VPN 的网站；在 `Via VPN` 模式下，不在列表里的一切都直连。在 2026-11-24 的构建中，它的 21,015 个不同 IP 地址里有 217 个（1.0%）落在 `cn-cidr.json` 的中国大陆网段内：上游文件里也有少量托管在国内的域名（22,485 个条目中有 149 个至少含一个这样的地址，例如 alicloud.com）。在 `Via VPN` 模式下，这些地址依然走 VPN，并无害处。在 `Directly` 模式下，整份列表都会绕过 VPN，所以绝不要在那里导入。
 
-关于并集：写作本文时，两份上游列表在约 96% 的地址空间上一致，并集额外加入了只有其中一份声称拥有的 3.8%（1360 万个地址）。其中 580 万个地址是 mayaxcn 的列表在前一周新增的，另一份列表并没有它们。选择并集是有意为之：它让更多中国大陆流量留在 VPN 之外。代价是，如果任一上游在这些网段上有误，发往这些网段的境外流量会绕过 VPN。如果你更想只保留两份列表都认同的部分，请提交 issue，或让 `config.yaml` 只指向一个 URL。
+关于并集：只要**任意一份**上游列出某个网段，`cn-cidr.json` 就会保留它，所以任何一份中的错误网段都会让对应流量绕过 VPN。两者的构建方式不同：mayaxcn 基于 APNIC 注册记录；gaoyifan 基于经由中国主要运营商的 BGP 路由数据，再加上登记在中国、但没有任何网络宣告的地址。2026-11-26 两者在 97.9% 的地址空间上一致，并集为 5,801 个 CIDR、351,463,272 个地址，其中只有 80,896 个是 mayaxcn 没有的。因此第二份列表只是小幅补充，**并不是备份**：任一 URL 出问题，整个 `cn-cidr.json` 都会停在旧文件上。
+
+2026-11-26 之前，第二份列表是 `Xiaobei09/Rule-Provider`，其账号已从 GitHub 上消失（404）。用它构建的最后一版列表有 359,175,656 个地址。现在这一对覆盖的地址少了 2.15%，且没有任何超出旧列表的内容；掉出去的地址现在走 VPN。旧 URL 是被删除的，而不是仅仅跳过：GitHub 允许释放出来的账号名被重新注册，新主人在那里发布的任何内容都会被合并进一份绕过 VPN 的列表。
 
 Loyalsoldier 的其他列表（`direct`、`reject`、`apple` 等）不再构建：把域名转成 IP 快照并不适合这个 App，而固定列表已经覆盖了中国大陆。你仍可以把其中任何一个加回 `config.yaml`（见[配置](#配置)）。
 
@@ -154,7 +156,7 @@ Loyalsoldier 的其他列表（`direct`、`reject`、`apple` 等）不再构建�
 | `cn-cidr.json` | 7,305 | 6,793 | 359,175,656 个地址（占 IPv4 的 8.4%） | 486.1 kB |
 | `proxy.json` | 27,407 | 22,485 | 解析成功率 82.0% | 3.0 MB |
 
-CIDR 列表来自两份上游的 5,697 和 7,054 个 IPv4 网段，其中 5,446 个同时出现在两份文件中，剩下 7,305 个不同的网段，合并为 6,793 个 CIDR。有 2,982 行 IPv6 被跳过，没有无效行。在域名列表中，有 4,346 条规则同时出现在 `gfw.txt` 和 `proxy.txt` 中。
+CIDR 列表来自当时的两份上游（5,697 和 7,054 个 IPv4 网段），其中 5,446 个同时出现在两份文件中，剩下 7,305 个不同的网段，合并为 6,793 个 CIDR。有 2,982 行 IPv6 被跳过，没有无效行。在域名列表中，有 4,346 条规则同时出现在 `gfw.txt` 和 `proxy.txt` 中。
 
 在没有生成条目的 4,922 条域名规则中，4,393 条没有 A 记录（1,485 条 NXDOMAIN，2,908 条空应答或仅有 IPv6），282 条返回 SERVFAIL，247 条超时，没有其他类型的失败。只有超时计入错误率门槛：0.90%，上限为 10%。22,485 个条目共包含 42,326 个地址，其中 21,015 个互不相同。
 
@@ -240,12 +242,12 @@ flowchart LR
     C --> E["生成 JSON"]
     D --> E
     E --> F{"质量门槛<br/>与 schema 校验"}
-    F -->|"所有数据源通过"| G["新的 GitHub Release"]
-    F -->|"任一数据源失败"| H["保留上一次发布"]
+    F -->|"所有重建的列表通过"| G["新的 GitHub Release"]
+    F -->|"任一重建的列表失败"| H["保留上一次发布"]
 ```
 
 1. **拉取。** 对每个 GitHub 上的 URL，先把分支解析为 commit SHA，再以该 SHA 下载文件，因此 `build-info.json` 中记录的 `revision` 准确描述了读取的内容。（如果 GitHub API 查询失败，则改用分支 URL，此时 `revision` 为 `null`。）下载带退避重试；空响应、超大响应、被截断的响应（短于声明的 `Content-Length`）和非 UTF-8 响应都会被拒绝。
-2. **解析。** 跳过注释和空行，完全重复的规则被去除，无效行会被报告而不是被悄悄忽略。**一个数据源的每个 URL 都必须贡献规则**：只提供垃圾内容的 URL 会让构建停止，而不是悄悄地从合并列表中消失。
+2. **解析。** 跳过注释和空行，完全重复的规则被去除，无效行会被报告而不是被悄悄忽略。**一个数据源的每个 URL 都必须贡献规则**：只提供垃圾内容的 URL 会让该列表停在旧文件上，而不是悄悄地从合并结果中消失。
    - *域名列表：* 规则转为小写并校验；IP 字面量、通配符、IDN 和格式错误的标签都视为无效。
    - *CIDR 列表：* 接受上游出现的三种写法（`1.0.1.0/24`、`ip-cidr, 1.0.1.0/24` 和 `IP-CIDR,1.0.1.0/24,DIRECT,no-resolve`）。IPv6 行（包括 QuantumultX 的 `ip6-cidr` 关键字）会被有意跳过并计数。无效行包括：主机位不为零的行、前缀短于 `/8` 的行、与任何私有或特殊用途网段有重叠的行，以及声明了 `DIRECT` 之外策略的行。列出的网段会绕过 VPN，所以 `IP-CIDR,8.8.8.0/24,PROXY` 绝不能出现在列表中，而包含 `0.0.0.0/0` 的列表会让所有流量绕过 VPN。
 3. **解析 DNS（仅域名列表）。** 所有域名数据源中的不同名称只**统一解析一次**（见 [DNS 解析](#dns-解析)）。CIDR 列表从不接触 DNS。
@@ -300,7 +302,9 @@ NXDOMAIN、空应答和 SERVFAIL 反映的是*域名*的状况而不是解析器
 | `max_addresses` | 无（默认配置：`400000000`） | 拒绝覆盖地址数超过该值的列表：对绕过 VPN 的列表来说，上游声称得太多才是危险的故障 |
 | JSON schema | 始终 | 字段精确、`ip` 与 `ips` 为空、规范的公网 IPv4 网段、前缀不短于 `/8`、有序、无重叠 |
 
-发布是**全有或全无**：只要任一被选中的数据源未通过，就不会上传任何内容，上一次发布保持不变。阈值可按数据源单独覆盖（见下文）。
+**上游损坏只会暂停它自己的列表。** 如果某个列表的某个 URL 下载失败，或不含任何可用规则，该列表就不会重建：沿用上一次发布的文件，其他列表照常构建，运行页面会显示一条警告注解，任务摘要中也会注明。这次运行仍算成功，所以请留意这条警告：在该 URL 恢复可用、或你把它从 `config.yaml` 中删除之前，这份列表会一直停留在旧版本。如果没有可沿用的旧文件，或所有选中的列表都无法构建，构建会失败。
+
+**质量门槛是全有或全无的**：只要任一重建的列表未通过，就不会上传任何内容，上一次发布保持不变。阈值可按数据源单独覆盖（见下文）。
 
 **故障时快速失败。** 如果已完成至少 500 次查询，其中超过 90% 超时或出错，说明 runner 上没有任何解析器在应答。构建会立即停止（退出码 1，不发布任何内容），而不是花几个小时去重试剩下的所有名称。网络只是变差（被限流、一批失效域名集中出现）时不会中止，由运行结束后按数据源计算的错误率门槛来判定。
 
@@ -389,7 +393,7 @@ validation:           # 所有域名数据源的默认值
 
 每次运行都会在任务摘要页写入摘要（各列表统计、失败情况），并把 `reports/`（失败列表）作为构建 artifact 上传。
 
-**发布失败时。** 用户只会看到完整的发布。发布任务会先从最新发布中取回没有变化的列表，并按 `build-info.json` 中记录的 SHA-256 校验每个文件；不一致就会停止运行（带 `force` 运行工作流即可重建所有列表）。然后以草稿形式创建新发布，上传全部资产（最多重试三次），校验大小，最后才用一次调用将其发布并标记为 *Latest*。如果在这一步之前出现任何失败，草稿会被删除，上一个发布仍是最新发布，保持不变。已发布的发布永远不会被修改；那一步之后才出现的失败不会撤回新发布，因为它已经是用户下载的版本。清理旧发布放在最后，清理失败不会导致构建失败。
+**发布失败时。** 用户只会看到完整的发布。发布任务会先从最新发布中取回没有新文件的列表（没有变化，或未重建），并按 `build-info.json` 中记录的 SHA-256 校验每个文件；不一致就会停止运行（带 `force` 运行工作流即可重建所有列表；上游损坏的列表即使这样也不会重建，请先修复或删除那个 URL）。然后以草稿形式创建新发布，上传全部资产（最多重试三次），校验大小，最后才用一次调用将其发布并标记为 *Latest*。如果在这一步之前出现任何失败，草稿会被删除，上一个发布仍是最新发布，保持不变。已发布的发布永远不会被修改；那一步之后才出现的失败不会撤回新发布，因为它已经是用户下载的版本。清理旧发布放在最后，清理失败不会导致构建失败。
 
 **单数据源与无变化的构建。** 以 `source=proxy` 手动运行只会重建 `proxy.json`，并把它的记录合并进现有的 `build-info.json`，其他列表及其元数据保持原样。生成内容与上次发布字节完全相同的列表会直接沿用上次发布中的版本；对 `cn-cidr.json` 来说，大多数运行都是如此。
 
@@ -435,7 +439,7 @@ nxdomain	.gone.example
 | 构建失败，提示 `error rate … exceeds the … limit` | 解析器不可达或被限流。重新运行；若持续出现，降低 `dns.concurrency` / `dns.max_qps`，提高 `dns.timeout` / `dns.retries`，或更换 `dns.resolvers`。 |
 | `resolved rate … is below the … minimum` | 几乎所有应答都为空。检查解析器和 `reports/*-failures.txt`；对本来就解析率低的列表，可单独设置 `min_resolved_rate`。 |
 | `resolvers unreachable: … lookups timed out or failed` | runner 无法访问所配置的任何解析器，构建提前停止，没有发布任何内容。稍后重试，或把 `dns.resolvers` 改为 GitHub 网络可达的解析器。 |
-| `… has only N valid IPv4 CIDRs (minimum M)` | 该上游为空、被截断或改了格式，因此不被允许从并集中消失。打开消息中指出的 URL 检查。如果上游确实缩小了，再降低 `min_entries`。 |
+| `… has only N valid IPv4 CIDRs (minimum M)` | 该上游被截断或改了格式，因此不被允许从并集中消失。打开消息中指出的 URL 检查。如果上游确实缩小了，再降低 `min_entries`。 |
 | `only N merged CIDRs (minimum M)` | 虽然每个上游都通过了检查，合并后的列表仍然太小。降低 `min_entries` 之前，请先检查上游的改动。 |
 | `entry …: prefix is shorter than /8` | 两个相邻的上游网段（例如 `6.0.0.0/8` 和 `7.0.0.0/8`）合并成了比本工具愿意让其绕过 VPN 的上限更大的块。构建会失败并保留上一次发布；改动任何设置之前，请先查看上游的变化。 |
 | `the list covers … addresses, over the … limit` | 某个上游列表增长到远超中国大陆的实际规模，或混入了错误的网段。提高 `max_addresses` 之前，请先检查上游的改动。 |
@@ -443,7 +447,8 @@ nxdomain	.gone.example
 | `no usable previous build-info.json to merge into` | 手动的单数据源运行会合并进现有发布的 `build-info.json`，而它缺失、已损坏或下载失败。请先以 `source=all` 运行一次工作流（若只是下载失败，重新运行即可）。 |
 | `no domains resolved … refusing to publish empty output` | 条目为零。仅当确实预期输出为空时（例如一份纯顶级域名列表），才对该数据源设置 `allow_empty: true`。 |
 | `source '…' has no valid rules` | 上游的域名文件为空或格式不同。打开配置中的 URL 检查。 |
-| `GET … failed` | 网络或上游问题；拉取器已经重试过。稍后重新运行。 |
+| `GET … failed` | 网络或上游问题；拉取器已经重试过。该列表会沿用旧文件（见下一行）；若没有可沿用的文件，构建失败。稍后重新运行。 |
+| `… was not rebuilt` 警告，但运行成功 | 该列表的某个上游下载失败或不含可用规则，因此沿用了旧文件。打开警告中指出的 URL 检查。如果它的仓库或账号已经不存在，请直接从 `config.yaml` 中删除该 URL，不要继续等待：别人可能注册这个名字并在那里发布文件。 |
 | 预期的域名不在输出中 | 在 `<source>-failures.txt` 中查找。`nodata` 通常表示该名称本身没有 A 记录（对没有主域名记录的后缀规则和顶级域名很常见）。 |
 | 大量 `servfail` | 大型列表中的失效域名很常见；它们不会触发错误率门槛。 |
 | *Actions* 标签页中没有新的运行 | 启动构建的 cron 任务已停止，或其令牌已过期（见上文）。请手动触发一次 *Run workflow*。 |
@@ -486,7 +491,7 @@ python -m src.main --source cn-cidr --out-dir dist --reports-dir reports   # 真
 ```
 
 命令行选项：`--config`、`--source`（`all` 或逗号分隔）、`--force`、`--out-dir`、`--reports-dir`、`--previous-build-info`、`--require-previous`（除非该文件可用否则失败；工作流在单数据源构建时会设置它）、`-v`。
-退出码：`0` 成功（包括“无变化”），`1` 质量门槛或校验失败，`2` 配置、下载或解析问题，`130` 被中断。失败时不会向 `--out-dir` 写入任何文件。
+退出码：`0` 成功（包括“无变化”），`1` 质量门槛或校验失败，`2` 配置问题，或下载、解析失败导致没有可沿用的旧文件、或没有任何列表可构建，`130` 被中断。失败时不会向 `--out-dir` 写入任何文件。
 
 数据源的 `url` 也可以是 `file://` URL，测试套件就是这样用本地样例构建的。
 
@@ -523,7 +528,7 @@ python -m src.main --source cn-cidr --out-dir dist --reports-dir reports   # 真
 - **导入时不做解析，且只读取一次文件。** 没有发现订阅 URL 的方式，所以刷新列表就意味着手动导入新文件。文档对域名也是这么说的：App 保存它手上的地址，并且不会自动更新。
 - **桌面客户端每次连接时会重新解析已保存的主机名**，并且只增加地址：旧地址不会被移除。在移动端客户端中没有发现类似机制，连接期间也不会刷新。以点开头的条目（后缀规则）是否会被重新解析，目前不清楚。
 - **同一时间只有一种模式生效**，每种模式各有自己保存的列表（见[快速开始](#快速开始)）。
-- **每个地址和子网都会变成一条路由。** `cn-cidr.json` 有 6,793 个条目，在开发者自己的测试中导入没有问题。其他客户端和操作系统能承受多少条路由，目前不清楚，所以在依赖它之前，请先在你的设备上试一试。
+- **每个地址和子网都会变成一条路由。** `cn-cidr.json` 在 2026-11-26 有 5,801 个条目；此前一个 6,793 个条目的版本在开发者自己的测试中导入没有问题。其他客户端和操作系统能承受多少条路由，目前不清楚，所以在依赖它之前，请先在你的设备上试一试。
 
 ### 更新列表（`proxy.json`）
 
@@ -540,34 +545,42 @@ python -m src.main --source cn-cidr --out-dir dist --reports-dir reports   # 真
 
 ## 我们测试过的其他数据源
 
-在确定 `cn-cidr.json` 的两份上游列表之前，我们把另外四份公开的中国大陆 IPv4 列表与它们的并集做了对比。四份都没有被加入：两份没有任何新内容，另两份会加入不在中国大陆的网段。
+我们把公开的中国大陆 IPv4 列表与两份旧上游（mayaxcn 与 Xiaobei09）生成的 `cn-cidr.json`（6,793 个 CIDR，359,175,656 个地址）做了对比。下面的列表中，gaoyifan 接替了 Xiaobei09 的位置，其余候选都没有使用。
 
-以下是 2026-11-24 的一次性测量，用本项目自己的 CIDR 解析器，对照当天的 `cn-cidr.json`（6,793 个 CIDR，359,175,656 个地址）。它们不属于构建流程，而且这些列表一直在变化，请把它当作一次快照。
+以下是 2026-11-24 与 2026-11-26 的一次性测量，使用本项目自己的 CIDR 解析器。它们不属于构建流程，而且这些列表一直在变化，请把它当作一次快照。
 
-| 列表 | CIDR 数 | 地址数 | 已在 `cn-cidr.json` 中 | 加入后会新增 |
-|---|---:|---:|---|---|
-| [mayaxcn/china-ip-list](https://github.com/mayaxcn/china-ip-list) `chnroute.txt` | 5,697 | 351.4M | 我们的来源之一 | 无 |
-| [Xiaobei09/Rule-Provider](https://github.com/Xiaobei09/Rule-Provider) `CN.txt` | 6,635 | 353.3M | 我们的来源之一 | 无 |
-| [fernvenue/chn-cidr-list](https://github.com/fernvenue/chn-cidr-list) `ipv4.txt` | 5,641 | 345.7M | 100.00% | 无新增 |
-| [windmgc/chnroute_auto](https://github.com/windmgc/chnroute_auto) `chnroute-v4` | 5,500 | 342.9M | 100.00% | 无新增 |
-| [metowolf/iplist](https://github.com/metowolf/iplist) `CN.txt` | 5,668 | 348.3M | 99.62% | 1,337,968 个地址（479 个 CIDR，+0.37%） |
-| [SukkaW/chnroutes2-optimized](https://github.com/SukkaW/chnroutes2-optimized) `chnroutes.txt` | 3,893 | 282.1M | 99.92% | 235,776 个地址（155 个 CIDR，+0.066%） |
+| 列表 | 测量日期 | CIDR 数 | 地址数 | 已在该文件中 | 加入后会新增 | 是否使用 |
+|---|---|---:|---:|---|---|---|
+| [mayaxcn/china-ip-list](https://github.com/mayaxcn/china-ip-list) `chnroute.txt` | 2026-11-24 | 5,697 | 351.4M | 当时的来源 | 无 | 是 |
+| Xiaobei09/Rule-Provider `CN.txt` | 2026-11-24 | 6,635 | 353.3M | 当时的来源 | 无 | 已消失 |
+| [gaoyifan/china-operator-ip](https://github.com/gaoyifan/china-operator-ip) `china.txt` | 2026-11-26 | 6,235 | 344.3M | 100.00% | 无新增 | **是** |
+| [xkww3n/Rules](https://github.com/xkww3n/Rules) `domestic_ip.txt` | 2026-11-26 | 6,242 | 344.3M | 100.00% | 无新增 | 否 |
+| [fernvenue/chn-cidr-list](https://github.com/fernvenue/chn-cidr-list) `ipv4.txt` | 2026-11-24 | 5,641 | 345.7M | 100.00% | 无新增 | 否 |
+| [windmgc/chnroute_auto](https://github.com/windmgc/chnroute_auto) `chnroute-v4` | 2026-11-24 | 5,500 | 342.9M | 100.00% | 无新增 | 否 |
+| [metowolf/iplist](https://github.com/metowolf/iplist) `CN.txt` | 2026-11-24 | 5,668 | 348.3M | 99.62% | 1,337,968 个地址（479 个 CIDR，+0.37%） | 否 |
+| [SukkaW/chnroutes2-optimized](https://github.com/SukkaW/chnroutes2-optimized) `chnroutes.txt` | 2026-11-24 | 3,893 | 282.1M | 99.92% | 235,776 个地址（155 个 CIDR，+0.066%） | 否 |
+| [SukkaW/ruleset.skk.moe](https://gitlab.com/SukkaW/ruleset.skk.moe/-/raw/master/List/ip/china_ip.conf) `china_ip.conf` | 2026-11-26 | 3,887 | 282.1M | 99.92% | 236,800 个地址（156 个 CIDR，+0.066%） | 否 |
+| [LM-Firefly/Rules](https://github.com/LM-Firefly/Rules) `CN-IP.list` | 2026-11-26 | 6,791 | 354.5M | 99.11% | 3,152,693 个地址（675 个 CIDR，+0.88%） | 否 |
+| [17mon/china_ip_list](https://github.com/17mon/china_ip_list) `china_ip_list.txt` | 2026-11-26 | 7,456 | 354.1M | 99.16% | 2,975,806 个地址（625 个 CIDR，+0.83%） | 否 |
 
-CIDR 数是合并相邻和重叠网段之后的数量。windmgc/chnroute_auto 发布了 8,798 行；Xiaobei09 的文件有 7,054 行 IPv4，另有 2,982 行 IPv6 被跳过。前两行是我们正在使用的来源，列在这里作对照。
+CIDR 数是合并相邻和重叠网段之后的数量。windmgc/chnroute_auto 发布了 8,798 行；Xiaobei09 的文件有 7,054 行 IPv4，另有 2,982 行 IPv6 被跳过。
 
-- **没有新内容：fernvenue/chn-cidr-list 与 windmgc/chnroute_auto。** 前者基于 APNIC 与 BGP/ASN 数据，采用 BSD-3-Clause 许可，每天更新；后者只基于 APNIC 的分配文件，GitHub 显示它没有许可证。两者的每一个地址都已在并集之中。
-- **注册在中国大陆之外的网段：metowolf/iplist。** 我们对它新增的 24 个最大网段（占新增地址的 67%）查询了首个地址的注册记录，其中 21 个查到了记录。没有一个注册在中国：它们属于新加坡的网络、Amazon、Apple 和字节跳动，以及华为云在智利、南非、埃及和新加坡的区域。`proxy.json` 的 21,015 个 IP 地址中有 2 个落在新增的空间里，其中一个在华为云新加坡的网段内，它们本会绕过 VPN。GitHub 显示该仓库没有许可证。
-- **更小，且不是超集：Sukka 的 chnroutes2。** 它基于 BGP 路由公告，并集中有 7,733 万个地址（21.5%）不在它里面。它新增的最大 14 个网段（占新增地址的 57%）注册在香港、巴基斯坦、越南和日本，另有一个 ARIN 的网段（LILLY-NET）。`proxy.json` 中有 6 个 IP 地址落在新增的空间里，其中五个属于 Zoho，一个属于 sina.com.hk，它们本会绕过 VPN。它的许可证是 CC BY-SA 2.0 + MIT，其“相同方式共享”条款可能适用于由它派生的列表。我们没有就此做法律判断。
+- **已采用：gaoyifan。** 它没有超出旧文件的内容，并包含 80,896 个 mayaxcn 没有的地址。它的构建方式与 mayaxcn 不同（基于 BGP 路由数据，而不只是注册记录），采用 MIT 许可证，每天更新，并且从 GitHub 获取，因此每次构建都会记录它读取的确切提交。随 Xiaobei09 丢失的地址空间，它只能找回约 1%。
+- **同样的数据，多经一方：xkww3n。** 它的构建脚本下载 gaoyifan 的 `china.txt`，改换格式后每天发布到作者自己的域名上（`rules.xkww3n.cyou`，经由 Cloudflare Pages）。它没有新增任何内容，构建无法把它固定到某个提交，还在数据与你的 VPN 之间多加了一方。所以我们直接使用源头。
+- **没有新内容：fernvenue/chn-cidr-list 与 windmgc/chnroute_auto。** 前者基于 APNIC 与 BGP/ASN 数据，采用 BSD-3-Clause 许可，每天更新；后者只基于 APNIC 的分配文件，GitHub 显示它没有许可证。两者的每一个地址都在旧文件中，并且（2026-11-26 核对）也都在现在的两份上游中，所以它们找不回任何内容。
+- **注册在中国大陆之外的网段：LM-Firefly/Rules 与 17mon/china_ip_list。** 它们找回的最多，分别约为随 Xiaobei09 丢失地址空间的 31% 和 26%，但同时也加入了不在中国的网段。我们对它们新增的最大网段查询了首个地址的注册记录（LM-Firefly 14 个，占其新增地址的 81%；17mon 24 个，占 92%）。记录指向阿里云（新加坡）、名为 ACE-SG 和 ACEVILLE 的网络（登记在新加坡、秘鲁、印度尼西亚和日本名下）、Amazon，17mon 中还有 Apple。没有一条记录把国家标为中国。加到现在的两份上游上（2026-11-26 核对），LM-Firefly 会多带来 5,509,685 个地址，其中包含 `proxy.json` 中 11 个条目的 27 个 IP 地址；17mon 会多带来 4,977,983 个，包含 7 个条目的 18 个地址。两组都包括 `c.mi.com`、`minimax.io`、`hsbc.com.cn` 和 `nikke-*.com` 系列网站，LM-Firefly 的还包括 `futu.link`。它们都会绕过 VPN。LM-Firefly 的文件自 2026-10-10 起没有变化，17mon 的仓库自 2025-03-04 起没有变化，GitHub 显示两者都没有许可证。
+- **注册在中国大陆之外的网段：metowolf/iplist。** 我们对它新增的 24 个最大网段（占新增地址的 67%）查询了首个地址的注册记录，其中 21 个查到了记录。没有一个注册在中国：它们属于新加坡的网络、Amazon、Apple 和字节跳动，以及华为云在智利、南非、埃及和新加坡的区域。`proxy.json` 的 21,015 个 IP 地址中有 2 个落在新增的空间里，其中一个在华为云新加坡的网段内，它们本会绕过 VPN。GitHub 显示该仓库没有许可证。按现在的两份上游衡量（2026-11-26），它只能找回丢失空间的约 1.3%。
+- **更小，且不是超集：Sukka 的两份列表。** `chnroutes.txt` 基于 BGP 路由公告，旧文件中有 7,733 万个地址（21.5%）不在它里面。它新增的最大 14 个网段（占新增地址的 57%）注册在香港、巴基斯坦、越南和日本，另有一个 ARIN 的网段（LILLY-NET）。`proxy.json` 中有 6 个 IP 地址落在新增的空间里，其中五个属于 Zoho，一个属于 sina.com.hk，它们本会绕过 VPN。它的许可证是 CC BY-SA 2.0 + MIT，其“相同方式共享”条款可能适用于由它派生的列表。我们没有就此做法律判断。Sukka 规则集里的 `china_ip.conf` 是同样的数据：文件头注明来源为 `chnroutes2.cdn.skk.moe`，许可证为 CC BY-SA 2.0。2026-11-26 有 7 个 `proxy.json` 条目落在它的新增空间里（`sina.com.hk` 和六个 Zoho 域名），它能找回的不到丢失空间的 0.1%。另外，它只有 3,887 个网段，低于本项目每个 URL 4,000 的 `min_entries` 下限，原样加入会让每次构建都失败；而且 GitLab 地址无法固定到某个提交。
 
-因此，`cn-cidr.json` 的两个来源保持不变。如果你想自己试另一份列表，把它的 `raw.githubusercontent.com` 地址加到 `config.yaml` 里 `cn-cidr` 的 `url` 中即可；多个 URL 会合并成一份列表（见[配置](#配置)）。
+如果你想自己试另一份列表，把它的 `raw.githubusercontent.com` 地址加到 `config.yaml` 里 `cn-cidr` 的 `url` 中即可；多个 URL 会合并成一份列表（见[配置](#配置)）。其中每一个都必须正常，该列表才会重建，并且每一个都需要至少 `min_entries` 个网段。
 
 ## 致谢
 
 本项目建立在优秀的开源工作之上，在此诚挚感谢：
 
-- [**mayaxcn/china-ip-list**](https://github.com/mayaxcn/china-ip-list)：每小时更新的中国大陆 IPv4 列表，是 `cn-cidr.json` 的一半来源。
-- [**Xiaobei09/Rule-Provider**](https://github.com/Xiaobei09/Rule-Provider)：QuantumultX 的 `CN.txt` 列表，是另一半来源。
-- [**APNIC**](https://www.apnic.net/)：上述两份列表所依据的公开注册数据。
+- [**mayaxcn/china-ip-list**](https://github.com/mayaxcn/china-ip-list)：基于 APNIC 注册记录的中国大陆 IPv4 列表，是 `cn-cidr.json` 的一半来源。
+- [**gaoyifan/china-operator-ip**](https://github.com/gaoyifan/china-operator-ip)：基于 BGP 与注册数据、每日更新的中国 IPv4 地址列表，是 `cn-cidr.json` 的另一半来源。
+- [**APNIC**](https://www.apnic.net/)：两份中国大陆列表都用到的公开注册数据。
 - [**Loyalsoldier/surge-rules**](https://github.com/Loyalsoldier/surge-rules)：`proxy.json` 背后持续维护的域名规则集。域名列表的一切都源于他们的规则。
 - [**Loyalsoldier/v2ray-rules-dat**](https://github.com/Loyalsoldier/v2ray-rules-dat) 与 [**v2fly/domain-list-community**](https://github.com/v2fly/domain-list-community)：据 surge-rules 的 README，它们是其规则集的主要数据来源。
 - [**felixonmars/dnsmasq-china-list**](https://github.com/felixonmars/dnsmasq-china-list)：据 surge-rules 的 README，Apple 与 Google 列表中部分域名来源于此。
@@ -582,4 +595,4 @@ CIDR 数是合并相邻和重叠网段之后的数量。windmgc/chnroute_auto �
 
 本仓库的源代码以 [MIT 许可证](LICENSE) 发布。
 
-生成的列表派生自其他项目的数据。`cn-cidr.json` 派生自 [mayaxcn/china-ip-list](https://github.com/mayaxcn/china-ip-list) 与 [Xiaobei09/Rule-Provider](https://github.com/Xiaobei09/Rule-Provider)（两者均采用 MIT 许可证，基于 APNIC 公开注册数据，后者还使用了 IPtoASN 数据）。`proxy.json` 派生自采用 **GPL-3.0** 许可的 [Loyalsoldier/surge-rules](https://github.com/Loyalsoldier/surge-rules)，以及它所依赖的各项目。如需再分发生成的文件，请先查阅上游许可证。
+生成的列表派生自其他项目的数据。`cn-cidr.json` 派生自 [mayaxcn/china-ip-list](https://github.com/mayaxcn/china-ip-list)（采用 MIT 许可证，基于 APNIC 公开注册数据）与 [gaoyifan/china-operator-ip](https://github.com/gaoyifan/china-operator-ip)（采用 MIT 许可证，基于公开的 BGP 与注册数据）。`proxy.json` 派生自采用 **GPL-3.0** 许可的 [Loyalsoldier/surge-rules](https://github.com/Loyalsoldier/surge-rules)，以及它所依赖的各项目。如需再分发生成的文件，请先查阅上游许可证。

@@ -35,22 +35,22 @@
 #                      bypasses the VPN, an over-inclusive feed is the dangerous failure.
 # ---------------------------------------------------------------------------
 sources:
-  # Fixed: mainland China IPv4 networks. The union of both upstream lists (an address is
-  # kept if either list has it): 6,793 CIDRs / 359M addresses when this was written, of a
-  # possible 3.7 billion. Use the raw.githubusercontent.com URL of a file, not its
+  # Fixed: mainland China IPv4 networks. Several URLs are merged (an address is kept if any
+  # list has it): 5,801 CIDRs / 351M addresses when this was written, of a possible
+  # 3.7 billion. Use the raw.githubusercontent.com URL of a file, not its
   # github.com/.../blob/ page, so the build can pin it to a commit.
   cn-cidr:
     kind: cidr
     url:
       - https://raw.githubusercontent.com/mayaxcn/china-ip-list/master/chnroute.txt
-      - https://raw.githubusercontent.com/Xiaobei09/Rule-Provider/main/ruleset/geoip/QuantumultX/CN.txt
+      - https://raw.githubusercontent.com/gaoyifan/china-operator-ip/ip-lists/china.txt
     # A floor against an empty or badly truncated feed, not a precise check: the network count
     # of one upstream fell from 8,798 to 5,697 in a week when it re-aggregated, while its
-    # coverage grew. Today the upstreams hold 5,697 and 7,054 IPv4 networks.
+    # coverage grew. Today the upstreams hold 5,697 and 6,235 IPv4 networks.
     min_entries: 4000
-    # The union is ~359M addresses and grew 1.7% in the 30 days measured. 400M leaves room for
-    # about 11%, not for a feed that starts claiming whole /8 blocks. A build that hits the
-    # ceiling fails and keeps the previous release; raise it after checking the upstream diff.
+    # The union is ~351M addresses. 400M leaves room for about 14%, not for a feed that starts
+    # claiming whole /8 blocks. A build that hits the ceiling fails and keeps the previous
+    # release; raise it after checking the upstream diff.
     max_addresses: 400000000
 
   # Updated: domains that need the VPN, resolved to IPv4. Re-import it from time to time.

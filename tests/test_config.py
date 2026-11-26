@@ -30,11 +30,10 @@ def test_shipped_config_defines_exactly_the_two_kinds_of_list():
     assert fixed.kind == "cidr"
     assert fixed.urls == (
         "https://raw.githubusercontent.com/mayaxcn/china-ip-list/master/chnroute.txt",
-        "https://raw.githubusercontent.com/Xiaobei09/Rule-Provider/main/ruleset/geoip/"
-        "QuantumultX/CN.txt",
+        "https://raw.githubusercontent.com/gaoyifan/china-operator-ip/ip-lists/china.txt",
     )
-    # Each upstream has 5,700+ networks, so a 4,000 floor per URL catches an empty or badly
-    # truncated feed without tripping on re-aggregation; 400M addresses is ~11% above today's
+    # Each upstream has 5,600+ networks, so a 4,000 floor per URL catches an empty or badly
+    # truncated feed without tripping on re-aggregation; 400M addresses is ~14% above today's
     # union, enough for normal growth but not for a feed that starts claiming whole /8 blocks.
     assert (fixed.min_entries, fixed.max_addresses) == (4000, 400_000_000)
 

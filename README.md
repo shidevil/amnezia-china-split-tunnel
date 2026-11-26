@@ -83,14 +83,14 @@ Every 6 hours (00:41, 06:41, 12:41 and 18:41 UTC) a GitHub Actions workflow:
 5. validates them against strict quality gates, and
 6. publishes a new GitHub Release whenever a list changed. The newest release is always the one marked *Latest*, so the download URLs never change. A list whose content did not change is carried over from the previous release.
 
-If anything goes wrong while building (a DNS outage, an empty or truncated upstream file, a failed quality gate), the build fails and **the previous release stays untouched**. If anything fails before the new release is published, that release is deleted (it is built as a draft, which nobody can see), so the previous release keeps being what users download (see [Automation and releases](#automation-and-releases)).
+If something goes wrong while building (a DNS outage, a truncated upstream file, a failed quality gate), the build fails and **the previous release stays untouched**. An upstream that cannot be downloaded or holds no usable rules is the exception: only its own list pauses and keeps its previous file. If anything fails before the new release is published, that release is deleted (it is built as a draft, which nobody can see), so the previous release keeps being what users download (see [Automation and releases](#automation-and-releases)).
 
 ### Highlights
 
 - **Fully automated**: built every 6 hours plus manual runs; the build runs on GitHub Actions, and no machine of yours is involved.
 - **Two lists, no overlap in purpose**: one fixed list that does not depend on DNS, one refreshed domain list.
 - **Suffix rules preserved**: `.example.com` and `example.com` are different rules and stay different in the output.
-- **Safe by construction**: all-or-nothing publishing, failure-rate gates, a size floor for every upstream and a size ceiling for the merged network list, schema validation of the written files, and a fail-fast abort when the DNS resolvers are unreachable.
+- **Safe by construction**: all-or-nothing quality gates (failure rates, a size floor for every upstream and a size ceiling for the merged network list), schema validation of the written files, a fail-fast abort when the DNS resolvers are unreachable, and a list with a broken upstream keeping its last released file.
 - **Only usable addresses**: IPv4 only; sinkhole answers (`0.0.0.0`, `127.0.0.1`), private ranges and implausibly short prefixes (shorter than `/8`) never reach a routing list.
 - **Deterministic output**: stable ordering, so unchanged data produces identical files and no needless release updates.
 - **Config-driven**: add, merge or disable a source in `config.yaml`; no code changes.
@@ -135,13 +135,15 @@ All files carry the [Amnezia import format](#output-format). Upstream files are 
 
 | Output | Kind | Upstream files | What it contains |
 |---|---|---|---|
-| `cn-cidr.json` | `cidr` | [`chnroute.txt`](https://raw.githubusercontent.com/mayaxcn/china-ip-list/master/chnroute.txt) of [mayaxcn/china-ip-list](https://github.com/mayaxcn/china-ip-list), and [`CN.txt`](https://raw.githubusercontent.com/Xiaobei09/Rule-Provider/main/ruleset/geoip/QuantumultX/CN.txt) of [Xiaobei09/Rule-Provider](https://github.com/Xiaobei09/Rule-Provider) | Mainland-China IPv4 networks. A network is kept if **either** upstream lists it (a union), and the result is collapsed. IPv6 lines are dropped. |
+| `cn-cidr.json` | `cidr` | [`chnroute.txt`](https://raw.githubusercontent.com/mayaxcn/china-ip-list/master/chnroute.txt) of [mayaxcn/china-ip-list](https://github.com/mayaxcn/china-ip-list), and [`china.txt`](https://raw.githubusercontent.com/gaoyifan/china-operator-ip/ip-lists/china.txt) of [gaoyifan/china-operator-ip](https://github.com/gaoyifan/china-operator-ip) | Mainland-China IPv4 networks. A network is kept if **either** upstream lists it (a union), and the result is collapsed. IPv6 lines are dropped. |
 | `proxy.json` | `domains` | `gfw.txt` and `proxy.txt` from the `release` branch of [Loyalsoldier/surge-rules](https://github.com/Loyalsoldier/surge-rules/tree/release) | Websites outside China that need the VPN: the domains of both files, merged and de-duplicated, each with its current IPv4 addresses. Import it in `Via VPN` mode only. |
 | `build-info.json` | n/a | n/a | Build metadata: timestamp, upstream commits, per-list counts, hashes |
 
 About `proxy.json`: it is not a list of every address outside China. It holds only the websites that the two Loyalsoldier files say need the VPN, and in `Via VPN` mode everything that is not on it goes out directly. In the build of 2026-11-24, 217 of its 21,015 distinct IP addresses (1.0%) fall inside the China networks of `cn-cidr.json`: the upstream files also carry a few China-hosted domains (149 of the 22,485 entries have at least one such address, for example alicloud.com). In `Via VPN` mode those still go through the VPN, which is harmless. In `Directly` mode the whole list would skip the VPN, so never import it there.
 
-About the union: when this was written the two upstream lists agreed on about 96% of the address space, and the union adds the 3.8% (13.6 million addresses) that only one of them claims. 5.8 million of those addresses were added to mayaxcn's list during the previous week and are not in the other list. The union was chosen on purpose: it keeps more mainland-China traffic out of the VPN. The cost is that if either upstream is wrong about one of those ranges, foreign traffic to that range bypasses the VPN. If you would rather keep only what both lists agree on, say so in an issue or point `config.yaml` at one URL.
+About the union: `cn-cidr.json` keeps a network if **either** upstream lists it, so a wrong range in either one sends that traffic around the VPN. The two are built differently: mayaxcn from APNIC registry records; gaoyifan from BGP routing data through China's main network operators, plus China-registered space that no network announces. On 2026-11-26 they agreed on 97.9% of the address space, and the union held 5,801 CIDRs covering 351,463,272 addresses, only 80,896 of which mayaxcn lacked. So the second list is a small addition and **not a backup**: if either URL breaks, the whole of `cn-cidr.json` stays on its previous file.
+
+Until 2026-11-26 the second list was `Xiaobei09/Rule-Provider`, whose account is no longer on GitHub (404). The last list built with it held 359,175,656 addresses. The current pair covers 2.15% fewer, and nothing the old list did not; the addresses that dropped out now go through the VPN. The old URL was removed, not just skipped: GitHub lets a freed account name be claimed again, and whatever a new owner published there would have been merged into a list that bypasses the VPN.
 
 Other Loyalsoldier lists (`direct`, `reject`, `apple`, …) are no longer built: a domain-to-IP snapshot is a poor fit for the app, and the fixed list covers China. You can still add any of them to `config.yaml` (see [Configuration](#configuration)).
 
@@ -154,7 +156,7 @@ Measured in a full build on 2026-11-24 (upstream commits `6eaf976`, `4f4feb1` an
 | `cn-cidr.json` | 7,305 | 6,793 | 359,175,656 addresses (8.4% of IPv4) | 486.1 kB |
 | `proxy.json` | 27,407 | 22,485 | 82.0% resolved | 3.0 MB |
 
-The CIDR list came from 5,697 and 7,054 upstream IPv4 networks, of which 5,446 are in both files, leaving 7,305 distinct networks that collapse into 6,793 CIDRs. 2,982 IPv6 lines were skipped and none was invalid. In the domain list, 4,346 rules appear in both `gfw.txt` and `proxy.txt`.
+The CIDR list came from the two upstreams of that day (5,697 and 7,054 IPv4 networks), of which 5,446 are in both files, leaving 7,305 distinct networks that collapse into 6,793 CIDRs. 2,982 IPv6 lines were skipped and none was invalid. In the domain list, 4,346 rules appear in both `gfw.txt` and `proxy.txt`.
 
 Of the 4,922 domain rules without an entry, 4,393 have no A record (1,485 NXDOMAIN, 2,908 empty answers or IPv6 only), 282 got SERVFAIL, 247 timed out and none failed in any other way. Only the timeouts count toward the error gate: 0.90%, against a limit of 10%. The 22,485 entries hold 42,326 addresses, 21,015 of them distinct.
 
@@ -240,12 +242,12 @@ flowchart LR
     C --> E["Generate JSON"]
     D --> E
     E --> F{"Quality gates<br/>and schema validation"}
-    F -->|"all sources pass"| G["New GitHub Release"]
-    F -->|"any source fails"| H["Previous release kept"]
+    F -->|"all rebuilt lists pass"| G["New GitHub Release"]
+    F -->|"any rebuilt list fails"| H["Previous release kept"]
 ```
 
 1. **Fetch.** For every URL on GitHub, the branch is resolved to a commit SHA first and the file is downloaded at that SHA, so the `revision` recorded in `build-info.json` describes exactly what was read. (If the GitHub API lookup fails, the branch URL is used instead and `revision` is `null`.) Downloads are retried with backoff; empty, oversized, truncated (shorter than the declared `Content-Length`) or non-UTF-8 responses are rejected.
-2. **Parse.** Comments and blank lines are skipped and exact duplicates are dropped. Invalid lines are reported rather than silently ignored. **Every URL of a source must contribute rules**: one that serves only junk stops the build instead of silently dropping out of a merged list.
+2. **Parse.** Comments and blank lines are skipped and exact duplicates are dropped. Invalid lines are reported rather than silently ignored. **Every URL of a source must contribute rules**: one that serves only junk pauses that list on its previous file instead of silently dropping out of the merge.
    - *Domain lists:* rules are lower-cased and validated; IP literals, wildcards, IDN and malformed labels are invalid.
    - *CIDR lists:* the three spellings seen upstream are accepted (`1.0.1.0/24`, `ip-cidr, 1.0.1.0/24` and `IP-CIDR,1.0.1.0/24,DIRECT,no-resolve`). IPv6 lines (including the QuantumultX `ip6-cidr` keyword) are skipped on purpose and counted. Invalid lines: host bits set, a prefix shorter than `/8`, any overlap with a private or special-purpose range, and any line that names a policy other than `DIRECT`. A listed network bypasses the VPN, so `IP-CIDR,8.8.8.0/24,PROXY` must not end up on the list, and a list containing `0.0.0.0/0` would route everything around the VPN.
 3. **Resolve (domain lists only).** All distinct names across all domain sources are resolved **once** (see [DNS resolution](#dns-resolution)). CIDR lists never touch DNS.
@@ -300,7 +302,9 @@ NXDOMAIN, empty answers and SERVFAIL describe the *domain*, not the resolver, so
 | `max_addresses` | none (shipped: `400000000`) | refuse a list covering more addresses than this: a feed that claims too much is the dangerous failure of a list that bypasses the VPN |
 | JSON schema | always | exact keys, empty `ip` and `ips`, canonical public IPv4 networks, no prefix shorter than `/8`, sorted, no overlaps |
 
-Publishing is **all-or-nothing**: if any selected source fails, nothing is uploaded and the previous release remains. Thresholds can be overridden per source (see below).
+**A broken upstream pauses only its own list.** If a URL of a list cannot be downloaded, or holds no usable rules, that list is not rebuilt: the previous release's file is kept, the other lists build as usual, and the run shows a warning annotation and a note in the job summary. The run still succeeds, so watch for that warning: the list stays frozen until the URL works again or you remove it from `config.yaml`. The build fails if there is no previous file to keep, or if no selected list can be built.
+
+**The quality gates are all-or-nothing**: if any rebuilt list fails one, nothing is uploaded and the previous release remains. Thresholds can be overridden per source (see below).
 
 **Fail-fast on outages.** If, after at least 500 lookups, more than 90% of them timed out or errored, no resolver is answering from the runner. The build stops at once (exit code 1, nothing published) instead of spending hours retrying every remaining name. A merely degraded network (throttling, clusters of dead domains) is not aborted; the per-source error-rate gate decides that after the run.
 
@@ -389,7 +393,7 @@ The workflow has two jobs:
 
 Every run writes a summary (per-list counts, failures) to the job summary page, and uploads `reports/` (failure lists) as a build artifact.
 
-**If a publish fails.** Users only ever see a release once it is complete. The publish job first takes the lists that did not change from the latest release and checks every file against the SHA-256 recorded in `build-info.json`; a mismatch stops the run (run the workflow with `force` to rebuild every list). It then creates the new release as a draft, uploads every asset (retrying up to three times), verifies the sizes, and only then publishes it and marks it *Latest* in a single call. If anything fails before that call, the draft is deleted and the previous release stays the latest, untouched. A published release is never modified, and a failure after that call leaves the new release in place: it is already what users download. Old releases are pruned last, and a failure to prune never fails the build.
+**If a publish fails.** Users only ever see a release once it is complete. The publish job first takes the lists that have no new file (unchanged, or not rebuilt) from the latest release and checks every file against the SHA-256 recorded in `build-info.json`; a mismatch stops the run (run the workflow with `force` to rebuild every list; a list whose upstream is broken is not rebuilt even then, so fix or remove that URL first). It then creates the new release as a draft, uploads every asset (retrying up to three times), verifies the sizes, and only then publishes it and marks it *Latest* in a single call. If anything fails before that call, the draft is deleted and the previous release stays the latest, untouched. A published release is never modified, and a failure after that call leaves the new release in place: it is already what users download. Old releases are pruned last, and a failure to prune never fails the build.
 
 **Single-source and unchanged builds.** A manual run with `source=proxy` rebuilds only `proxy.json` and merges its record into the existing `build-info.json`, so the other lists and their metadata stay as they were. Lists whose generated content is byte-identical to the previous release are carried over from it as they are; for `cn-cidr.json` that is most runs.
 
@@ -435,7 +439,7 @@ Download them from the run page: *Actions → the run → Artifacts → `build-r
 | Build fails with `error rate … exceeds the … limit` | Resolvers were unreachable or throttling. Re-run; if it persists, lower `dns.concurrency` / `dns.max_qps`, raise `dns.timeout` / `dns.retries`, or change `dns.resolvers`. |
 | `resolved rate … is below the … minimum` | Almost every answer was empty. Check the resolvers and `reports/*-failures.txt`; for lists that legitimately resolve poorly set a per-source `min_resolved_rate`. |
 | `resolvers unreachable: … lookups timed out or failed` | The runner could not reach any of the configured resolvers, so the build stopped early. Nothing was published. Re-run later, or point `dns.resolvers` at resolvers that are reachable from GitHub's network. |
-| `… has only N valid IPv4 CIDRs (minimum M)` | That upstream was empty, truncated or changed its format, and was not allowed to drop out of the union. Open the URL named in the message. If the feed really shrank, lower `min_entries`. |
+| `… has only N valid IPv4 CIDRs (minimum M)` | That upstream was truncated or changed its format, and was not allowed to drop out of the union. Open the URL named in the message. If the feed really shrank, lower `min_entries`. |
 | `only N merged CIDRs (minimum M)` | The merged list is too small even though each upstream passed. Check the upstream diffs before lowering `min_entries`. |
 | `entry …: prefix is shorter than /8` | Two adjacent upstream networks (for example `6.0.0.0/8` and `7.0.0.0/8`) collapsed into a block larger than this tool will route around the VPN. The build fails and keeps the previous release; look at the upstream diff before changing anything. |
 | `the list covers … addresses, over the … limit` | An upstream list grew far beyond mainland China's real size, or a wrong range slipped in. Inspect the upstream diff before raising `max_addresses`. |
@@ -443,7 +447,8 @@ Download them from the run page: *Actions → the run → Artifacts → `build-r
 | `no usable previous build-info.json to merge into` | A manual single-source run merges into the existing release's `build-info.json`, and it was missing, corrupt or could not be downloaded. Run the workflow once with `source=all` (or re-run if the download failed). |
 | `no domains resolved … refusing to publish empty output` | Zero entries. Set `allow_empty: true` for that source only if an empty file is genuinely expected (for example a list of bare top-level domains). |
 | `source '…' has no valid rules` | The upstream domain file was empty or in another format. Open the URL in the config and check it. |
-| `GET … failed` | Network or upstream problem; the fetcher already retried. Re-run later. |
+| `GET … failed` | Network or upstream problem; the fetcher already retried. The list keeps its previous file (next row); if there is none to keep, the build fails. Re-run later. |
+| `… was not rebuilt` warning on a run that succeeded | An upstream of that list could not be downloaded or had no usable rules, so the previous file was kept. Open the URL named in the warning. If its repository or account is gone, remove the URL from `config.yaml` instead of waiting: someone else may claim the name and publish a file there. |
 | A domain you expect is missing | Look it up in `<source>-failures.txt`. `nodata` usually means the name has no A record of its own (common for suffix rules on apex-less zones and TLDs). |
 | Many `servfail` entries | Normal for dead or lame domains in large lists; they do not trip the error gate. |
 | No new runs in the *Actions* tab | The cron job that starts the build has stopped, or its token expired (see above). Start one by hand with *Run workflow*. |
@@ -486,7 +491,7 @@ python -m src.main --source cn-cidr --out-dir dist --reports-dir reports   # rea
 ```
 
 CLI options: `--config`, `--source` (`all` or comma-separated), `--force`, `--out-dir`, `--reports-dir`, `--previous-build-info`, `--require-previous` (fail unless that file is usable; the workflow sets it for single-source builds), `-v`.
-Exit codes: `0` success (including "nothing changed"), `1` quality gate or validation failed, `2` configuration, download or parsing problem, `130` interrupted. Nothing is written to `--out-dir` on failure.
+Exit codes: `0` success (including "nothing changed"), `1` quality gate or validation failed, `2` configuration problem, or a download or parsing problem that leaves no previous file to keep or no list to build, `130` interrupted. Nothing is written to `--out-dir` on failure.
 
 A source `url` may also be a `file://` URL, which is how the test-suite builds from local fixtures.
 
@@ -523,7 +528,7 @@ Read from the client's source code ([amnezia-client](https://github.com/amnezia-
 - **Importing resolves nothing and reads the file once.** No way to subscribe to a URL was found, so refreshing a list means importing a new file by hand. The documentation says the same about domains: the app stores the addresses it has, and does not update them automatically.
 - **The desktop client re-resolves saved hostnames on every connect**, and only adds addresses: old ones are never removed. No equivalent was found in the mobile clients, and nothing refreshes while a connection is up. Whether an entry that starts with a dot (a suffix rule) is re-resolved is not known.
 - **One mode is active at a time**, each with its own saved list (see [Quick start](#quick-start)).
-- **Every address and subnet becomes a route.** `cn-cidr.json` has 6,793 entries, and it imported without problems in the developer's own test. How many routes other clients and operating systems cope with is not known, so try it on your device before relying on it.
+- **Every address and subnet becomes a route.** `cn-cidr.json` had 5,801 entries on 2026-11-26, and an earlier 6,793-entry version imported without problems in the developer's own test. How many routes other clients and operating systems cope with is not known, so try it on your device before relying on it.
 
 ### The updated list (`proxy.json`)
 
@@ -540,34 +545,42 @@ This file is an **IP snapshot of DNS answers**, not a live domain-matching syste
 
 ## Other source lists we tested
 
-Before settling on the two upstream lists of `cn-cidr.json`, we measured four other public mainland-China IPv4 lists against their union. None was added: two contain nothing new, and two would add ranges that are not in China.
+We compared public mainland-China IPv4 lists with the `cn-cidr.json` that the two former upstreams (mayaxcn and Xiaobei09) produced: 6,793 CIDRs, 359,175,656 addresses. One list below, gaoyifan's, has taken Xiaobei09's place. The other candidates are not used.
 
-These are one-off measurements from 2026-11-24, made with this project's own CIDR parser against that day's `cn-cidr.json` (6,793 CIDRs, 359,175,656 addresses). They are not part of the build, and the lists keep changing, so read them as a snapshot.
+These are one-off measurements from 2026-11-24 and 2026-11-26, made with this project's own CIDR parser. They are not part of the build, and the lists keep changing, so read them as a snapshot.
 
-| List | CIDRs | Addresses | Already in `cn-cidr.json` | What it would add |
-|---|---:|---:|---|---|
-| [mayaxcn/china-ip-list](https://github.com/mayaxcn/china-ip-list) `chnroute.txt` | 5,697 | 351.4M | one of our sources | none |
-| [Xiaobei09/Rule-Provider](https://github.com/Xiaobei09/Rule-Provider) `CN.txt` | 6,635 | 353.3M | one of our sources | none |
-| [fernvenue/chn-cidr-list](https://github.com/fernvenue/chn-cidr-list) `ipv4.txt` | 5,641 | 345.7M | 100.00% | nothing |
-| [windmgc/chnroute_auto](https://github.com/windmgc/chnroute_auto) `chnroute-v4` | 5,500 | 342.9M | 100.00% | nothing |
-| [metowolf/iplist](https://github.com/metowolf/iplist) `CN.txt` | 5,668 | 348.3M | 99.62% | 1,337,968 addresses (479 CIDRs, +0.37%) |
-| [SukkaW/chnroutes2-optimized](https://github.com/SukkaW/chnroutes2-optimized) `chnroutes.txt` | 3,893 | 282.1M | 99.92% | 235,776 addresses (155 CIDRs, +0.066%) |
+| List | Measured | CIDRs | Addresses | Already in that file | What it would add | Used |
+|---|---|---:|---:|---|---|---|
+| [mayaxcn/china-ip-list](https://github.com/mayaxcn/china-ip-list) `chnroute.txt` | 2026-11-24 | 5,697 | 351.4M | a source of it | none | yes |
+| Xiaobei09/Rule-Provider `CN.txt` | 2026-11-24 | 6,635 | 353.3M | a source of it | none | gone |
+| [gaoyifan/china-operator-ip](https://github.com/gaoyifan/china-operator-ip) `china.txt` | 2026-11-26 | 6,235 | 344.3M | 100.00% | nothing | **yes** |
+| [xkww3n/Rules](https://github.com/xkww3n/Rules) `domestic_ip.txt` | 2026-11-26 | 6,242 | 344.3M | 100.00% | nothing | no |
+| [fernvenue/chn-cidr-list](https://github.com/fernvenue/chn-cidr-list) `ipv4.txt` | 2026-11-24 | 5,641 | 345.7M | 100.00% | nothing | no |
+| [windmgc/chnroute_auto](https://github.com/windmgc/chnroute_auto) `chnroute-v4` | 2026-11-24 | 5,500 | 342.9M | 100.00% | nothing | no |
+| [metowolf/iplist](https://github.com/metowolf/iplist) `CN.txt` | 2026-11-24 | 5,668 | 348.3M | 99.62% | 1,337,968 addresses (479 CIDRs, +0.37%) | no |
+| [SukkaW/chnroutes2-optimized](https://github.com/SukkaW/chnroutes2-optimized) `chnroutes.txt` | 2026-11-24 | 3,893 | 282.1M | 99.92% | 235,776 addresses (155 CIDRs, +0.066%) | no |
+| [SukkaW/ruleset.skk.moe](https://gitlab.com/SukkaW/ruleset.skk.moe/-/raw/master/List/ip/china_ip.conf) `china_ip.conf` | 2026-11-26 | 3,887 | 282.1M | 99.92% | 236,800 addresses (156 CIDRs, +0.066%) | no |
+| [LM-Firefly/Rules](https://github.com/LM-Firefly/Rules) `CN-IP.list` | 2026-11-26 | 6,791 | 354.5M | 99.11% | 3,152,693 addresses (675 CIDRs, +0.88%) | no |
+| [17mon/china_ip_list](https://github.com/17mon/china_ip_list) `china_ip_list.txt` | 2026-11-26 | 7,456 | 354.1M | 99.16% | 2,975,806 addresses (625 CIDRs, +0.83%) | no |
 
-CIDR counts are taken after adjacent and overlapping networks are merged. windmgc/chnroute_auto publishes 8,798 lines, and Xiaobei09's file has 7,054 IPv4 lines plus 2,982 IPv6 lines that are skipped. The first two rows are the sources we use, shown for comparison.
+CIDR counts are taken after adjacent and overlapping networks are merged. windmgc/chnroute_auto publishes 8,798 lines, and Xiaobei09's file has 7,054 IPv4 lines plus 2,982 IPv6 lines that are skipped.
 
-- **Nothing new: fernvenue/chn-cidr-list and windmgc/chnroute_auto.** The first is built from APNIC and BGP/ASN data, is BSD-3-Clause licensed and updates daily. The second is built from APNIC's delegation file alone, and GitHub reports no licence for it. Every address of both is already in the union.
-- **Ranges registered outside China: metowolf/iplist.** We looked up the registry record of the first address of its 24 largest additional blocks (67% of the added addresses); 21 lookups returned a record. None is registered to China: they belong to Singapore networks, to Amazon, Apple and ByteDance, and to Huawei Cloud's regions in Chile, South Africa, Egypt and Singapore. 2 of the 21,015 IP addresses in `proxy.json` fall into the added space, one of them in a Huawei Cloud Singapore range, and they would have bypassed the VPN. GitHub reports no licence for the repository.
-- **Smaller, and not a superset: Sukka's chnroutes2.** It is built from BGP route announcements, and 77.3 million addresses of the union (21.5%) are not in it. Its 14 largest additional blocks (57% of the added addresses) are registered in Hong Kong, Pakistan, Vietnam and Japan, plus one ARIN block (LILLY-NET). 6 IP addresses in `proxy.json` fall into the added space, five of them Zoho's and one sina.com.hk's, and they would have bypassed the VPN. Its licence is CC BY-SA 2.0 + MIT, and the share-alike terms could apply to a list derived from it. We have not taken a legal view on that.
+- **Used: gaoyifan.** It adds nothing outside the former file and holds 80,896 addresses that mayaxcn lacks. It is built differently from mayaxcn (from BGP routing data, not only registry records), is MIT-licensed, updates daily and is served from GitHub, so each build records the exact commit it read. It wins back only about 1% of the address space lost with Xiaobei09.
+- **The same data through one more party: xkww3n.** Its build script downloads gaoyifan's `china.txt`, reformats it and publishes it daily on the author's own domain (`rules.xkww3n.cyou`, through Cloudflare Pages). It adds nothing, the build cannot pin it to a commit, and it puts one more party between the data and your VPN. We use the source instead.
+- **Nothing new: fernvenue/chn-cidr-list and windmgc/chnroute_auto.** The first is built from APNIC and BGP/ASN data, is BSD-3-Clause licensed and updates daily. The second is built from APNIC's delegation file alone, and GitHub reports no licence for it. Every address of both is in the former file, and (checked 2026-11-26) in today's two upstreams too, so neither would win anything back.
+- **Ranges registered outside China: LM-Firefly/Rules and 17mon/china_ip_list.** These would win back the most, about 31% and 26% of the address space lost with Xiaobei09, but they also add ranges that are not in China. We looked up the registry record of the first address of their largest additional blocks (14 for LM-Firefly, 81% of its added addresses; 24 for 17mon, 92%). They name Alibaba Cloud (Singapore), networks called ACE-SG and ACEVILLE (recorded under Singapore, Peru, Indonesia and Japan), Amazon and, for 17mon, Apple. No record gives China as the country. Added to today's two upstreams (checked 2026-11-26), LM-Firefly would bring 5,509,685 more addresses, holding 27 IP addresses of 11 `proxy.json` entries, and 17mon 4,977,983 more, holding 18 addresses of 7 entries. Both sets include `c.mi.com`, `minimax.io`, `hsbc.com.cn` and the `nikke-*.com` sites, and LM-Firefly's also `futu.link`. All of them would bypass the VPN. LM-Firefly's file has not changed since 2026-10-10 and 17mon's repository since 2025-03-04, and GitHub reports no licence for either.
+- **Ranges registered outside China: metowolf/iplist.** We looked up the registry record of the first address of its 24 largest additional blocks (67% of the added addresses); 21 lookups returned a record. None is registered to China: they belong to Singapore networks, to Amazon, Apple and ByteDance, and to Huawei Cloud's regions in Chile, South Africa, Egypt and Singapore. 2 of the 21,015 IP addresses in `proxy.json` fall into the added space, one of them in a Huawei Cloud Singapore range, and they would have bypassed the VPN. GitHub reports no licence for the repository. Measured against today's two upstreams (2026-11-26), it would win back only about 1.3% of the lost space.
+- **Smaller, and not a superset: Sukka's two lists.** `chnroutes.txt` is built from BGP route announcements, and 77.3 million addresses of the former file (21.5%) are not in it. Its 14 largest additional blocks (57% of the added addresses) are registered in Hong Kong, Pakistan, Vietnam and Japan, plus one ARIN block (LILLY-NET). 6 IP addresses in `proxy.json` fall into the added space, five of them Zoho's and one sina.com.hk's, and they would have bypassed the VPN. Its licence is CC BY-SA 2.0 + MIT, and the share-alike terms could apply to a list derived from it. We have not taken a legal view on that. `china_ip.conf`, from Sukka's ruleset, is the same data: its header names `chnroutes2.cdn.skk.moe` as the source and gives CC BY-SA 2.0 as the licence. On 2026-11-26, 7 `proxy.json` entries fell into its added space (`sina.com.hk` and six Zoho domains), and it would win back under 0.1% of the lost space. It also has 3,887 networks, under this project's `min_entries` floor of 4,000 per URL, so adding it unchanged would fail every build, and a GitLab URL cannot be pinned to a commit.
 
-The two sources of `cn-cidr.json` therefore stay as they are. To try another list yourself, add its `raw.githubusercontent.com` URL to the `url` of `cn-cidr` in `config.yaml`; several URLs are merged into one list (see [Configuration](#configuration)).
+To try another list yourself, add its `raw.githubusercontent.com` URL to the `url` of `cn-cidr` in `config.yaml`; several URLs are merged into one list (see [Configuration](#configuration)). Every one of them has to work for that list to be rebuilt, and each needs at least `min_entries` networks.
 
 ## Acknowledgements
 
 This project stands on the shoulders of excellent open-source work. Sincere thanks to:
 
-- [**mayaxcn/china-ip-list**](https://github.com/mayaxcn/china-ip-list): the hourly-updated mainland-China IPv4 list that is one half of `cn-cidr.json`.
-- [**Xiaobei09/Rule-Provider**](https://github.com/Xiaobei09/Rule-Provider): the QuantumultX `CN.txt` list that is the other half.
-- [**APNIC**](https://www.apnic.net/): the public registry data both lists are derived from.
+- [**mayaxcn/china-ip-list**](https://github.com/mayaxcn/china-ip-list): the mainland-China IPv4 list built from APNIC registry records, one half of `cn-cidr.json`.
+- [**gaoyifan/china-operator-ip**](https://github.com/gaoyifan/china-operator-ip): the daily list of China's IPv4 space built from BGP and registry data, the other half of `cn-cidr.json`.
+- [**APNIC**](https://www.apnic.net/): public registry data that both mainland-China lists draw on.
 - [**Loyalsoldier/surge-rules**](https://github.com/Loyalsoldier/surge-rules): the maintained domain sets behind `proxy.json`. Everything about the domain list exists because of their rules.
 - [**Loyalsoldier/v2ray-rules-dat**](https://github.com/Loyalsoldier/v2ray-rules-dat) and [**v2fly/domain-list-community**](https://github.com/v2fly/domain-list-community): per the surge-rules README, the main data sources of its rule sets.
 - [**felixonmars/dnsmasq-china-list**](https://github.com/felixonmars/dnsmasq-china-list): per the surge-rules README, the origin of some domains in the Apple and Google lists.
@@ -582,4 +595,4 @@ Thanks also to the [AmneziaVPN](https://github.com/amnezia-vpn) team, and to the
 
 The source code in this repository is released under the [MIT License](LICENSE).
 
-The generated lists are derived from other projects' data. `cn-cidr.json` derives from [mayaxcn/china-ip-list](https://github.com/mayaxcn/china-ip-list) and [Xiaobei09/Rule-Provider](https://github.com/Xiaobei09/Rule-Provider) (both MIT-licensed, built on public APNIC registry data, the second also on IPtoASN data). `proxy.json` derives from [Loyalsoldier/surge-rules](https://github.com/Loyalsoldier/surge-rules), which is licensed under the **GPL-3.0**, and from the projects it builds on. If you redistribute the generated files, please review the upstream licences.
+The generated lists are derived from other projects' data. `cn-cidr.json` derives from [mayaxcn/china-ip-list](https://github.com/mayaxcn/china-ip-list) (MIT-licensed, built on public APNIC registry data) and [gaoyifan/china-operator-ip](https://github.com/gaoyifan/china-operator-ip) (MIT-licensed, built on public BGP and registry data). `proxy.json` derives from [Loyalsoldier/surge-rules](https://github.com/Loyalsoldier/surge-rules), which is licensed under the **GPL-3.0**, and from the projects it builds on. If you redistribute the generated files, please review the upstream licences.
