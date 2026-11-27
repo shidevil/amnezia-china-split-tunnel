@@ -6,9 +6,9 @@
 
 由 GitHub Actions 每 6 小时刷新（UTC 00:41、06:41、12:41、18:41）· 以 GitHub Release 资产发布 · 无需自建服务器
 
-[![Build](https://github.com/shidevil/amnezia-china-split-tunnel/actions/workflows/build.yml/badge.svg)](https://github.com/shidevil/amnezia-china-split-tunnel/actions/workflows/build.yml)
-[![CI](https://github.com/shidevil/amnezia-china-split-tunnel/actions/workflows/ci.yml/badge.svg)](https://github.com/shidevil/amnezia-china-split-tunnel/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/badge/download-latest_release-blue.svg)](https://github.com/shidevil/amnezia-china-split-tunnel/releases/latest)
+[![Build](https://github.com/shidevil/amnezia-split-tunnel-rule-china/actions/workflows/build.yml/badge.svg)](https://github.com/shidevil/amnezia-split-tunnel-rule-china/actions/workflows/build.yml)
+[![CI](https://github.com/shidevil/amnezia-split-tunnel-rule-china/actions/workflows/ci.yml/badge.svg)](https://github.com/shidevil/amnezia-split-tunnel-rule-china/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/badge/download-latest_release-blue.svg)](https://github.com/shidevil/amnezia-split-tunnel-rule-china/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Python 3.12](https://img.shields.io/badge/python-3.12-3776AB.svg)
 
@@ -24,8 +24,8 @@
 
 | 你想要… | 下载 | Amnezia 模式 |
 |---|---|---|
-| 中国大陆流量留在 VPN **之外**（固定列表，无需刷新） | [`cn-cidr.json`](https://github.com/shidevil/amnezia-china-split-tunnel/releases/latest/download/cn-cidr.json) | `Directly` |
-| **中国大陆以外**需要走 VPN 的网站（被封锁或境外站点；每 6 小时刷新） | [`proxy.json`](https://github.com/shidevil/amnezia-china-split-tunnel/releases/latest/download/proxy.json) | `Via VPN` |
+| 中国大陆流量留在 VPN **之外**（固定列表，无需刷新） | [`cn-cidr.json`](https://github.com/shidevil/amnezia-split-tunnel-rule-china/releases/latest/download/cn-cidr.json) | `Directly` |
+| **中国大陆以外**需要走 VPN 的网站（被封锁或境外站点；每 6 小时刷新） | [`proxy.json`](https://github.com/shidevil/amnezia-split-tunnel-rule-china/releases/latest/download/proxy.json) | `Via VPN` |
 
 **`proxy.json` 必须导入 `Via VPN` 模式。** 它列出的是中国大陆以外的网站，如果导入 `Directly` 模式，这些网站会绕过 VPN，与这份列表的用途正好相反。
 
@@ -104,14 +104,14 @@ GitHub Actions 工作流每 6 小时（UTC 00:41、06:41、12:41、18:41，即�
 
 | 列表 | 下载地址 |
 |---|---|
-| cn-cidr（固定） | <https://github.com/shidevil/amnezia-china-split-tunnel/releases/latest/download/cn-cidr.json> |
-| proxy（持续更新） | <https://github.com/shidevil/amnezia-china-split-tunnel/releases/latest/download/proxy.json> |
+| cn-cidr（固定） | <https://github.com/shidevil/amnezia-split-tunnel-rule-china/releases/latest/download/cn-cidr.json> |
+| proxy（持续更新） | <https://github.com/shidevil/amnezia-split-tunnel-rule-china/releases/latest/download/proxy.json> |
 
 ```bash
-curl -fLO https://github.com/shidevil/amnezia-china-split-tunnel/releases/latest/download/cn-cidr.json
+curl -fLO https://github.com/shidevil/amnezia-split-tunnel-rule-china/releases/latest/download/cn-cidr.json
 ```
 
-> **使用 fork？** 请把所有链接中的 `shidevil/amnezia-china-split-tunnel` 替换为 `<你的账号>/<你的仓库>`。如需固定到某一次构建，请使用它的标签：
+> **使用 fork？** 请把所有链接中的 `shidevil/amnezia-split-tunnel-rule-china` 替换为 `<你的账号>/<你的仓库>`。如需固定到某一次构建，请使用它的标签：
 > `https://github.com/<owner>/<repo>/releases/download/<tag>/cn-cidr.json`。标签对应的发布被清理后，该链接即失效。
 
 ### 2. 导入 Amnezia
@@ -470,7 +470,7 @@ nxdomain	.gone.example
    git init
    git add -A
    git commit -m "Initial commit"
-   git remote add origin git@github.com:shidevil/amnezia-china-split-tunnel.git
+   git remote add origin git@github.com:shidevil/amnezia-split-tunnel-rule-china.git
    git branch -M main
    git push -u origin main
    ```

@@ -6,9 +6,9 @@
 
 Refreshed every 6 hours (00:41, 06:41, 12:41, 18:41 UTC) by GitHub Actions · Published as GitHub Release assets · No server required
 
-[![Build](https://github.com/shidevil/amnezia-china-split-tunnel/actions/workflows/build.yml/badge.svg)](https://github.com/shidevil/amnezia-china-split-tunnel/actions/workflows/build.yml)
-[![CI](https://github.com/shidevil/amnezia-china-split-tunnel/actions/workflows/ci.yml/badge.svg)](https://github.com/shidevil/amnezia-china-split-tunnel/actions/workflows/ci.yml)
-[![Release](https://img.shields.io/badge/download-latest_release-blue.svg)](https://github.com/shidevil/amnezia-china-split-tunnel/releases/latest)
+[![Build](https://github.com/shidevil/amnezia-split-tunnel-rule-china/actions/workflows/build.yml/badge.svg)](https://github.com/shidevil/amnezia-split-tunnel-rule-china/actions/workflows/build.yml)
+[![CI](https://github.com/shidevil/amnezia-split-tunnel-rule-china/actions/workflows/ci.yml/badge.svg)](https://github.com/shidevil/amnezia-split-tunnel-rule-china/actions/workflows/ci.yml)
+[![Release](https://img.shields.io/badge/download-latest_release-blue.svg)](https://github.com/shidevil/amnezia-split-tunnel-rule-china/releases/latest)
 [![License: MIT](https://img.shields.io/badge/license-MIT-blue.svg)](LICENSE)
 ![Python 3.12](https://img.shields.io/badge/python-3.12-3776AB.svg)
 
@@ -24,8 +24,8 @@ Pick **one** of the two lists. They are alternatives, not a pair ([why](#2-impor
 
 | If you want… | Download | Amnezia mode |
 |---|---|---|
-| Mainland-China traffic to stay **outside** the VPN (fixed list, no refreshing needed) | [`cn-cidr.json`](https://github.com/shidevil/amnezia-china-split-tunnel/releases/latest/download/cn-cidr.json) | `Directly` |
-| Websites **outside China** that need the VPN (blocked or foreign; refreshed every 6 hours) | [`proxy.json`](https://github.com/shidevil/amnezia-china-split-tunnel/releases/latest/download/proxy.json) | `Via VPN` |
+| Mainland-China traffic to stay **outside** the VPN (fixed list, no refreshing needed) | [`cn-cidr.json`](https://github.com/shidevil/amnezia-split-tunnel-rule-china/releases/latest/download/cn-cidr.json) | `Directly` |
+| Websites **outside China** that need the VPN (blocked or foreign; refreshed every 6 hours) | [`proxy.json`](https://github.com/shidevil/amnezia-split-tunnel-rule-china/releases/latest/download/proxy.json) | `Via VPN` |
 
 **`proxy.json` must be imported in `Via VPN` mode.** It lists websites outside China, so in `Directly` mode they would skip the VPN, the opposite of what the list is for.
 
@@ -104,14 +104,14 @@ Every release is tagged with its build time (for example `2026-11-24-070000`), a
 
 | List | Download |
 |---|---|
-| cn-cidr (fixed) | <https://github.com/shidevil/amnezia-china-split-tunnel/releases/latest/download/cn-cidr.json> |
-| proxy (updated) | <https://github.com/shidevil/amnezia-china-split-tunnel/releases/latest/download/proxy.json> |
+| cn-cidr (fixed) | <https://github.com/shidevil/amnezia-split-tunnel-rule-china/releases/latest/download/cn-cidr.json> |
+| proxy (updated) | <https://github.com/shidevil/amnezia-split-tunnel-rule-china/releases/latest/download/proxy.json> |
 
 ```bash
-curl -fLO https://github.com/shidevil/amnezia-china-split-tunnel/releases/latest/download/cn-cidr.json
+curl -fLO https://github.com/shidevil/amnezia-split-tunnel-rule-china/releases/latest/download/cn-cidr.json
 ```
 
-> **Using a fork?** Replace `shidevil/amnezia-china-split-tunnel` with `<your-account>/<your-repository>` in every URL. To pin one specific build, use its tag:
+> **Using a fork?** Replace `shidevil/amnezia-split-tunnel-rule-china` with `<your-account>/<your-repository>` in every URL. To pin one specific build, use its tag:
 > `https://github.com/<owner>/<repo>/releases/download/<tag>/cn-cidr.json`. A tag stops working once its release is pruned.
 
 ### 2. Import into Amnezia
@@ -470,7 +470,7 @@ To test a resolver by hand: `dig @1.1.1.1 +short A example.com`.
    git init
    git add -A
    git commit -m "Initial commit"
-   git remote add origin git@github.com:shidevil/amnezia-china-split-tunnel.git
+   git remote add origin git@github.com:shidevil/amnezia-split-tunnel-rule-china.git
    git branch -M main
    git push -u origin main
    ```
