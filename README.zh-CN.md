@@ -552,7 +552,7 @@ python -m src.main --source cn-cidr --out-dir dist --reports-dir reports   # 真
 
 我们把公开的中国大陆 IPv4 列表与两份旧上游（mayaxcn 与 Xiaobei09）生成的 `cn-cidr.json`（6,793 个 CIDR，359,175,656 个地址）做了对比。下面的列表中，gaoyifan 接替了 Xiaobei09 的位置，其余候选都没有使用。
 
-以下是 2026-11-24 与 2026-11-26 的一次性测量，使用本项目自己的 CIDR 解析器。它们不属于构建流程，而且这些列表一直在变化，请把它当作一次快照。
+以下是 2026-11-24、2026-11-26 与 2026-11-27 的一次性测量，使用本项目自己的 CIDR 解析器。它们不属于构建流程，而且这些列表一直在变化，请把它当作一次快照。
 
 | 列表 | 测量日期 | CIDR 数 | 地址数 | 已在该文件中 | 加入后会新增 | 是否使用 |
 |---|---|---:|---:|---|---|---|
@@ -560,6 +560,7 @@ python -m src.main --source cn-cidr --out-dir dist --reports-dir reports   # 真
 | Xiaobei09/Rule-Provider `CN.txt` | 2026-11-24 | 6,635 | 353.3M | 当时的来源 | 无 | 已消失 |
 | [gaoyifan/china-operator-ip](https://github.com/gaoyifan/china-operator-ip) `china.txt` | 2026-11-26 | 6,235 | 344.3M | 100.00% | 无新增 | **是** |
 | [xkww3n/Rules](https://github.com/xkww3n/Rules) `domestic_ip.txt` | 2026-11-26 | 6,242 | 344.3M | 100.00% | 无新增 | 否 |
+| [MetaCubeX/meta-rules-dat](https://github.com/MetaCubeX/meta-rules-dat) `cn.list` | 2026-11-27 | 6,242 | 344.3M | 100.00% | 无新增 | 否 |
 | [fernvenue/chn-cidr-list](https://github.com/fernvenue/chn-cidr-list) `ipv4.txt` | 2026-11-24 | 5,641 | 345.7M | 100.00% | 无新增 | 否 |
 | [windmgc/chnroute_auto](https://github.com/windmgc/chnroute_auto) `chnroute-v4` | 2026-11-24 | 5,500 | 342.9M | 100.00% | 无新增 | 否 |
 | [metowolf/iplist](https://github.com/metowolf/iplist) `CN.txt` | 2026-11-24 | 5,668 | 348.3M | 99.62% | 1,337,968 个地址（479 个 CIDR，+0.37%） | 否 |
@@ -572,6 +573,7 @@ CIDR 数是合并相邻和重叠网段之后的数量。windmgc/chnroute_auto �
 
 - **已采用：gaoyifan。** 它没有超出旧文件的内容，并包含 80,896 个 mayaxcn 没有的地址。它的构建方式与 mayaxcn 不同（基于 BGP 路由数据，而不只是注册记录），采用 MIT 许可证，每天更新，并且从 GitHub 获取，因此每次构建都会记录它读取的确切提交。随 Xiaobei09 丢失的地址空间，它只能找回约 1%。
 - **同样的数据，多经一方：xkww3n。** 它的构建脚本下载 gaoyifan 的 `china.txt`，改换格式后每天发布到作者自己的域名上（`rules.xkww3n.cyou`，经由 Cloudflare Pages）。它没有新增任何内容，构建无法把它固定到某个提交，还在数据与你的 VPN 之间多加了一方。所以我们直接使用源头。
+- **同样的数据，多经两方：MetaCubeX/meta-rules-dat。** 它 `geo/geoip` 目录里的 `cn.mrs` 是供 Mihomo（Clash Meta）使用的压缩二进制规则集。本项目只读取文本列表，因此加入这个 URL 会报 `not valid UTF-8`，`cn-cidr.json` 也就无法重建。旁边的 `cn.list` 是文本版本，IPv4 网段相同（2026-11-27 核对），另有 3,493 行 IPv6 会被跳过。该目录由 Loyalsoldier/geoip 的 `geoip.dat` 转换而来，后者把 MaxMind 的中国网段换成了 gaoyifan 的 `china.txt` 和 `china6.txt`。从 2026-11-05 到 2026-11-26，Loyalsoldier/geoip 每逢周四发布，所以这份副本可能比源头落后约一周。它的每一个 IPv4 地址都在现在的两份上游中（2026-11-27 核对）。所以我们直接使用源头。GitHub 显示该仓库的许可证为 GPL-3.0。
 - **没有新内容：fernvenue/chn-cidr-list 与 windmgc/chnroute_auto。** 前者基于 APNIC 与 BGP/ASN 数据，采用 BSD-3-Clause 许可，每天更新；后者只基于 APNIC 的分配文件，GitHub 显示它没有许可证。两者的每一个地址都在旧文件中，并且（2026-11-26 核对）也都在现在的两份上游中，所以它们找不回任何内容。
 - **注册在中国大陆之外的网段：LM-Firefly/Rules 与 17mon/china_ip_list。** 它们找回的最多，分别约为随 Xiaobei09 丢失地址空间的 31% 和 26%，但同时也加入了不在中国的网段。我们对它们新增的最大网段查询了首个地址的注册记录（LM-Firefly 14 个，占其新增地址的 81%；17mon 24 个，占 92%）。记录指向阿里云（新加坡）、名为 ACE-SG 和 ACEVILLE 的网络（登记在新加坡、秘鲁、印度尼西亚和日本名下）、Amazon，17mon 中还有 Apple。没有一条记录把国家标为中国。加到现在的两份上游上（2026-11-26 核对），LM-Firefly 会多带来 5,509,685 个地址，其中包含 `proxy.json` 中 11 个条目的 27 个 IP 地址；17mon 会多带来 4,977,983 个，包含 7 个条目的 18 个地址。两组都包括 `c.mi.com`、`minimax.io`、`hsbc.com.cn` 和 `nikke-*.com` 系列网站，LM-Firefly 的还包括 `futu.link`。它们都会绕过 VPN。LM-Firefly 的文件自 2026-10-10 起没有变化，17mon 的仓库自 2025-03-04 起没有变化，GitHub 显示两者都没有许可证。
 - **注册在中国大陆之外的网段：metowolf/iplist。** 我们对它新增的 24 个最大网段（占新增地址的 67%）查询了首个地址的注册记录，其中 21 个查到了记录。没有一个注册在中国：它们属于新加坡的网络、Amazon、Apple 和字节跳动，以及华为云在智利、南非、埃及和新加坡的区域。`proxy.json` 的 21,015 个 IP 地址中有 2 个落在新增的空间里，其中一个在华为云新加坡的网段内，它们本会绕过 VPN。GitHub 显示该仓库没有许可证。按现在的两份上游衡量（2026-11-26），它只能找回丢失空间的约 1.3%。
